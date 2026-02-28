@@ -1,0 +1,47 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# === Environment ===
+.env
+.env.local
+.env.*.local
+*.env
+venv/
+env/
+.venv/
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# === Frontend ===
+frontend/node_modules/
+frontend/.next/
+frontend/.vercel/
+frontend/out/
+
+# === HuggingFace / Model Cache ===
+*.bin
+*.safetensors
+*.pt
+*.onnx
+huggingface_cache/
+model_cache/
+
+# === Logs ===
+*.log
+logs/
+
+# === Test artifacts ===
+nexusai_test_*.txt

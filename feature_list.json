@@ -1,0 +1,116 @@
+[
+    {
+        "id": "infra-001",
+        "category": "Infrastructure",
+        "description": "Health Check: Backend API and Qdrant are alive and connected.",
+        "steps": [
+            {
+                "action": "GET http://localhost:8001/api/health",
+                "expected": "status=200, body.status='ok', body.qdrant=true",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-001",
+        "category": "Backend",
+        "description": "File Upload & Processing: Upload a .txt file, parse, chunk, embed, store in Qdrant.",
+        "steps": [
+            {
+                "action": "POST http://localhost:8001/api/upload with a test .txt file (multipart form, field='file')",
+                "expected": "status=200, body.status='Ready', body.chunks_count > 0, body.filename matches",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-002",
+        "category": "Backend",
+        "description": "Knowledge Base List: GET /api/files returns uploaded files.",
+        "steps": [
+            {
+                "action": "GET http://localhost:8001/api/files",
+                "expected": "status=200, body is array, contains object with filename matching the uploaded test file",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-003",
+        "category": "Backend",
+        "description": "RAG Chat: POST /api/chat returns SSE stream with sources and tokens.",
+        "steps": [
+            {
+                "action": "POST http://localhost:8001/api/chat with body {\"message\": \"What is in the uploaded document?\"}",
+                "expected": "status=200, content-type contains 'text/event-stream', stream contains 'sources' event and at least one 'token' event, stream ends with '[DONE]'",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-004",
+        "category": "Backend",
+        "description": "File Deletion Cascade: DELETE /api/files/{filename} removes file and its vectors.",
+        "steps": [
+            {
+                "action": "DELETE http://localhost:8001/api/files/{test_filename}",
+                "expected": "status=200, body.status='Deleted'",
+                "type": "auto"
+            },
+            {
+                "action": "GET http://localhost:8001/api/files",
+                "expected": "status=200, body does NOT contain the deleted filename",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "frontend-001",
+        "category": "Frontend",
+        "description": "UI Rendering: Header, Chat View, and Files View render correctly.",
+        "steps": [
+            {
+                "action": "Open http://localhost:3000 in browser",
+                "expected": "Page loads, NexusAI header visible, Chat input area visible",
+                "type": "browser"
+            },
+            {
+                "action": "Navigate to /files",
+                "expected": "Knowledge Base heading visible, upload drop area visible, file table rendered",
+                "type": "browser"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "frontend-002",
+        "category": "Frontend",
+        "description": "File Upload UI: Upload a file via drag-and-drop area and see it in the table.",
+        "steps": [
+            {
+                "action": "Use the file input on /files to upload a .txt file",
+                "expected": "File appears in the table with 'Ready' status badge after upload completes",
+                "type": "browser"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "frontend-003",
+        "category": "Frontend",
+        "description": "Chat UI: Send a message and receive a streaming AI response with citations.",
+        "steps": [
+            {
+                "action": "On / (chat page), type a question and submit",
+                "expected": "User message appears, AI typing indicator shows, then AI response streams in with source citations",
+                "type": "browser"
+            }
+        ],
+        "passes": true
+    }
+]
