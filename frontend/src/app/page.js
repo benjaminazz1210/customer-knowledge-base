@@ -38,34 +38,41 @@ export default function ChatPage() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
+      let streamDone = false;
 
-      while (true) {
+      while (!streamDone) {
         const { value, done } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        // Keep the last (potentially incomplete) line in the buffer
+        buffer = lines.pop() ?? "";
 
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const dataStr = line.replace("data: ", "").trim();
-            if (dataStr === "[DONE]") break;
-
-            try {
-              const data = JSON.parse(dataStr);
-              setMessages(prev => {
-                const newMsgs = [...prev];
-                const last = newMsgs[newMsgs.length - 1];
-                if (data.token) {
-                  last.text += data.token;
-                } else if (data.sources) {
-                  last.sources = data.sources;
-                }
-                return newMsgs;
-              });
-            } catch (err) {
-              console.error("Error parsing SSE data", err);
-            }
+          if (!line.startsWith("data: ")) continue;
+          const dataStr = line.slice(6).trim();
+          if (dataStr === "[DONE]") {
+            streamDone = true;
+            reader.cancel();
+            break;
+          }
+          try {
+            const data = JSON.parse(dataStr);
+            setMessages(prev => {
+              const newMsgs = [...prev];
+              const last = { ...newMsgs[newMsgs.length - 1] };
+              if (data.token) {
+                last.text += data.token;
+              } else if (data.sources) {
+                last.sources = data.sources;
+              }
+              newMsgs[newMsgs.length - 1] = last;
+              return newMsgs;
+            });
+          } catch (err) {
+            console.error("Error parsing SSE data", err);
           }
         }
       }
@@ -91,23 +98,6 @@ export default function ChatPage() {
           {messages.map((msg, idx) => (
             <ChatMessage key={idx} message={msg.text} isAi={msg.isAi} sources={msg.sources} />
           ))}
-
-          {isLoading && messages[messages.length - 1].text === "" && (
-            <div className="flex items-start gap-4 mb-6">
-              <div className="bg-primary/10 rounded-full w-10 h-10 shrink-0 flex items-center justify-center text-primary">
-                <span className="material-symbols-outlined text-xl">smart_toy</span>
-              </div>
-              <div className="flex flex-col gap-2 max-w-[85%]">
-                <div className="bg-white dark:bg-surface-lighter rounded-2xl rounded-tl-none px-5 py-4 shadow-sm border border-slate-100 dark:border-transparent">
-                  <div className="flex gap-1.5 items-center h-6">
-                    <div className="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></div>
-                    <div className="w-2 h-2 rounded-full bg-slate-400 animate-pulse delay-75"></div>
-                    <div className="w-2 h-2 rounded-full bg-slate-400 animate-pulse delay-150"></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </main>
 
