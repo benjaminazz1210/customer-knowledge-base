@@ -94,14 +94,14 @@ export default function ChatPage() {
         ref={scrollRef}
         className="flex-1 overflow-y-auto w-full flex justify-center py-6 px-4 sm:px-6 scroll-smooth"
       >
-        <div className="layout-content-container flex flex-col w-full max-w-[800px] justify-start pb-48">
+        <div className="layout-content-container flex flex-col w-full max-w-[800px] justify-start pb-4">
           {messages.map((msg, idx) => (
             <ChatMessage key={idx} message={msg.text} isAi={msg.isAi} sources={msg.sources} />
           ))}
         </div>
       </main>
 
-      <footer className="absolute bottom-0 left-0 right-0 bg-background-light/95 dark:bg-background-dark/95 backdrop-blur-md border-t border-slate-200 dark:border-surface-lighter z-20 pb-8 pt-4">
+      <footer className="bg-background-light/95 dark:bg-background-dark/95 backdrop-blur-md border-t border-slate-200 dark:border-surface-lighter z-20 pb-8 pt-4 w-full">
         <div className="max-w-[800px] mx-auto w-full px-4 sm:px-6">
           <form onSubmit={handleSubmit} className="relative group bg-white dark:bg-surface-lighter rounded-xl shadow-lg border border-slate-200 dark:border-surface-lighter/50 focus-within:ring-2 focus-within:ring-primary/50 focus-within:border-primary transition-all duration-200">
             <div className="flex items-center p-2 gap-2">
