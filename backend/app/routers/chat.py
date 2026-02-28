@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from ..services.rag_service import RAGService
+from openai import BadRequestError
 import json
 import asyncio
 
@@ -19,21 +20,30 @@ async def chat(request: ChatRequest):
     try:
         response_gen, sources = rag_service.generate_response(request.message)
         logger.info(f"   Sources found: {sources}")
-        
+
         async def stream_response():
             token_count = 0
-            # First send sources
             yield f"data: {json.dumps({'sources': sources})}\n\n"
-            
-            # Then send tokens
-            for chunk in response_gen:
-                if chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
-                    token_count += 1
-                    yield f"data: {json.dumps({'token': token})}\n\n"
-            
-            logger.info(f"✅ Chat complete: {token_count} tokens streamed")
-            yield "data: [DONE]\n\n"
+            try:
+                for chunk in response_gen:
+                    if chunk.choices[0].delta.content:
+                        token = chunk.choices[0].delta.content
+                        token_count += 1
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+                logger.info(f"✅ Chat complete: {token_count} tokens streamed")
+            except BadRequestError as e:
+                err_msg = str(e)
+                if "Content Exists Risk" in err_msg:
+                    logger.warning(f"⚠️  Content risk triggered by DeepSeek, sending fallback message")
+                    yield f"data: {json.dumps({'token': '抱歉，该文档中的部分内容触发了 AI 安全审核，无法直接回答。请尝试换一种提问方式，或上传其他文档。'})}\n\n"
+                else:
+                    logger.error(f"❌ BadRequestError in stream: {e}")
+                    yield f"data: {json.dumps({'token': f'请求错误：{err_msg}'})}\n\n"
+            except Exception as e:
+                logger.error(f"❌ Stream error: {e}", exc_info=True)
+                yield f"data: {json.dumps({'token': '生成回答时出现错误，请稍后重试。'})}\n\n"
+            finally:
+                yield "data: [DONE]\n\n"
 
         return StreamingResponse(stream_response(), media_type="text/event-stream")
     except Exception as e:
