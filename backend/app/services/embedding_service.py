@@ -4,17 +4,31 @@ from ..config import config
 from .scripts.qwen3_vl_embedding import Qwen3VLEmbedder
 
 class EmbeddingService:
-    def __init__(self):
-        # Initialize the Qwen3VLEmbedder model
-        # For Mac (Metal), we use torch.float16 if possible, otherwise float32
-        device = "mps" if torch.backends.mps.is_available() else "cpu"
-        dtype = torch.float16 if device == "mps" else torch.float32
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(EmbeddingService, cls).__new__(cls)
+            cls._instance._init_once(*args, **kwargs)
+        return cls._instance
+
+    def _init_once(self):
+        # Determine optimal device
+        if torch.backends.mps.is_available():
+            self.device = "mps"
+            self.dtype = torch.float16
+        elif torch.cuda.is_available():
+            self.device = "cuda"
+            self.dtype = torch.float32 # Default to float32 for CUDA unless specified otherwise
+        else:
+            self.device = "cpu"
+            self.dtype = torch.float32
         
-        print(f"🚀 Initializing Qwen3-VL-Embedding-2B on {device}...")
+        print(f"🚀 Initializing Qwen3-VL-Embedding-2B on {self.device}...")
         self.model = Qwen3VLEmbedder(
             model_name_or_path=config.EMBEDDING_MODEL,
-            dtype=dtype,
-            device_map=device
+            dtype=self.dtype,
+            device_map=self.device
         )
 
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
