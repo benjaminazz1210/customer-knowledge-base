@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@source "../components";
+
+@theme {
+  --color-primary: #0d59f2;
+  --color-background-light: #f5f6f8;
+  --color-background-dark: #111318;
+  --color-surface-dark: #1a1d24;
+  --color-surface-lighter: #242832;
+  --color-border-dark: #2a3447;
+
+  --font-display: "Inter", sans-serif;
+
+  --animate-fade-in: fadeIn 0.3s ease-out forwards;
+}
+
+@layer base {
+  body {
+    @apply font-display antialiased;
+  }
+}
+
+:root {
+  --background: #f5f6f8;
+  --foreground: #111318;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #111318;
+    --foreground: #f5f6f8;
+  }
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
