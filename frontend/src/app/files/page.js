@@ -18,13 +18,19 @@ export default function FilesPage() {
             const data = await resp.json();
             setFiles(data);
         } catch (err) {
-            console.error("Failed to fetch files", err);
+            console.error("获取文件失败", err);
         }
     };
+
+    const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
     const handleUpload = async (fileList) => {
         setIsUploading(true);
         for (const file of fileList) {
+            if (file.size > MAX_FILE_SIZE) {
+                alert(`「${file.name}」超过 100MB 限制（当前 ${(file.size / 1024 / 1024).toFixed(1)}MB），已跳过。`);
+                continue;
+            }
             const formData = new FormData();
             formData.append("file", file);
             try {
@@ -33,7 +39,7 @@ export default function FilesPage() {
                     body: formData,
                 });
             } catch (err) {
-                console.error("Upload error", err);
+                console.error("上传失败", err);
             }
         }
         setIsUploading(false);
@@ -41,14 +47,14 @@ export default function FilesPage() {
     };
 
     const handleDelete = async (filename) => {
-        if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
+        if (!confirm(`确定要删除「${filename}」吗？`)) return;
         try {
             await fetch(`http://localhost:8001/api/files/${filename}`, {
                 method: "DELETE",
             });
             fetchFiles();
         } catch (err) {
-            console.error("Delete error", err);
+            console.error("删除失败", err);
         }
     };
 
@@ -57,8 +63,8 @@ export default function FilesPage() {
             <div className="max-w-[1000px] mx-auto w-full space-y-8">
                 {/* Header */}
                 <div className="flex flex-col gap-1">
-                    <h1 className="text-2xl font-bold dark:text-white">Knowledge Base</h1>
-                    <p className="text-slate-500 dark:text-slate-400 text-sm">Upload and manage documents for RAG retrieval.</p>
+                    <h1 className="text-2xl font-bold dark:text-white">知识库</h1>
+                    <p className="text-slate-500 dark:text-slate-400 text-sm">上传和管理文档，用于 RAG 检索增强生成。</p>
                 </div>
 
                 {/* Upload Area */}
@@ -80,12 +86,13 @@ export default function FilesPage() {
                     </div>
                     <div className="text-center">
                         <p className="text-sm font-semibold dark:text-white mb-1">
-                            {isUploading ? "Uploading..." : "Click to upload or drag & drop"}
+                            {isUploading ? "上传中..." : "点击上传或拖拽到此处"}
                         </p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">PDF, TXT, DOCX, or MD (Max 10MB)</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">PDF、TXT、DOCX、PPTX 或 MD（最大 100MB）</p>
                     </div>
                     <input
                         type="file"
+                        accept=".pdf,.txt,.docx,.md,.pptx"
                         multiple
                         className="absolute inset-0 opacity-0 cursor-pointer"
                         onChange={(e) => handleUpload(e.target.files)}
@@ -98,16 +105,16 @@ export default function FilesPage() {
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="border-b border-slate-100 dark:border-surface-lighter bg-slate-50/50 dark:bg-surface-lighter/30">
-                                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">File Name</th>
-                                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 text-center">Status</th>
-                                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 text-right">Action</th>
+                                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">文件名</th>
+                                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 text-center">状态</th>
+                                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 text-right">操作</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-surface-lighter">
                             {files.length === 0 ? (
                                 <tr>
                                     <td colSpan="3" className="px-6 py-12 text-center text-slate-400 dark:text-slate-600 text-sm">
-                                        No documents uploaded yet.
+                                        暂无上传的文档。
                                     </td>
                                 </tr>
                             ) : (

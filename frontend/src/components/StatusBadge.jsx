@@ -5,11 +5,19 @@ export default function StatusBadge({ status }) {
         error: "bg-rose-500/10 text-rose-500 border-rose-500/20",
     };
 
-    const currentStyle = styles[status] || styles.ready;
+    const labels = {
+        ready: "就绪",
+        processing: "处理中",
+        error: "错误",
+    };
+
+    const key = status?.toLowerCase() || "ready";
+    const currentStyle = styles[key] || styles.ready;
+    const label = labels[key] || status;
 
     return (
         <div className={`px-2.5 py-0.5 rounded-full border text-[11px] font-bold uppercase tracking-wider ${currentStyle}`}>
-            {status}
+            {label}
         </div>
     );
 }

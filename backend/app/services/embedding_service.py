@@ -13,7 +13,7 @@ class EmbeddingService:
         print(f"🚀 Initializing Qwen3-VL-Embedding-2B on {device}...")
         self.model = Qwen3VLEmbedder(
             model_name_or_path=config.EMBEDDING_MODEL,
-            torch_dtype=dtype,
+            dtype=dtype,
             device_map=device
         )
 

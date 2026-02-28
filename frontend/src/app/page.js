@@ -5,7 +5,7 @@ import ChatMessage from "@/components/ChatMessage";
 
 export default function ChatPage() {
   const [messages, setMessages] = useState([
-    { text: "你好！我是 NexusAI 助手。你可以上传文档到知识库，然后在这里向我提问。", isAi: true, sources: [] }
+    { text: "你好！我是猪你好运，你的智能助手。你可以将文档上传到知识库，然后向我提问。", isAi: true, sources: [] }
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -73,7 +73,7 @@ export default function ChatPage() {
       console.error("Chat error:", error);
       setMessages(prev => {
         const newMsgs = [...prev];
-        newMsgs[newMsgs.length - 1].text = "抱歉，出错了。请检查后端服务是否运行。";
+        newMsgs[newMsgs.length - 1].text = "抱歉，发生了错误。请检查后端服务是否正常运行。";
         return newMsgs;
       });
     } finally {
@@ -120,7 +120,7 @@ export default function ChatPage() {
               </button>
               <input
                 className="flex-1 bg-transparent border-0 focus:ring-0 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 py-3 text-base"
-                placeholder="Ask NexusAI anything..."
+                placeholder="向猪你好运提问任何问题..."
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 disabled={isLoading}
@@ -135,7 +135,7 @@ export default function ChatPage() {
             </div>
           </form>
           <p className="text-center text-[11px] text-slate-400 dark:text-slate-600 mt-3 font-medium">
-            NexusAI can make mistakes. Please verify important information.
+            猪你好运可能会出错，重要信息请务必自行核实。
           </p>
         </div>
       </footer>
