@@ -48,13 +48,13 @@ class VectorStore:
         )
 
     def search(self, query_vector: List[float], limit: int = 5) -> List[Dict[str, Any]]:
-        results = self.client.search(
+        results = self.client.query_points(
             collection_name=config.COLLECTION_NAME,
-            query_vector=query_vector,
+            query=query_vector,
             limit=limit,
             with_payload=True
         )
-        return [{"payload": hit.payload, "score": hit.score} for hit in results]
+        return [{"payload": hit.payload, "score": hit.score} for hit in results.points]
 
     def delete_by_file(self, filename: str):
         self.client.delete(
