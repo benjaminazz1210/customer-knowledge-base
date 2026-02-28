@@ -13,7 +13,9 @@ class Config:
     QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
     COLLECTION_NAME = os.getenv("COLLECTION_NAME", "nexusai_knowledge_base")
     
-    LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-reasoner")
+    LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")  # 'deepseek' or 'ollama'
+    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     EMBEDDING_MODEL = "Qwen/Qwen3-VL-Embedding-2B"  # Multimodal 32k context
     
     VECTOR_DIMENSION = 1024  # Standardized for our collection
