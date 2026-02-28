@@ -94,7 +94,7 @@ export default function ChatPage() {
         ref={scrollRef}
         className="flex-1 overflow-y-auto w-full flex justify-center py-6 px-4 sm:px-6 scroll-smooth"
       >
-        <div className="layout-content-container flex flex-col w-full max-w-[800px] justify-start pb-32">
+        <div className="layout-content-container flex flex-col w-full max-w-[800px] justify-start pb-48">
           {messages.map((msg, idx) => (
             <ChatMessage key={idx} message={msg.text} isAi={msg.isAi} sources={msg.sources} />
           ))}
