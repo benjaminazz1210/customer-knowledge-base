@@ -4,12 +4,54 @@ import { useState, useRef, useEffect } from "react";
 import ChatMessage from "@/components/ChatMessage";
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState([
-    { text: "你好！我是猪你好运，你的智能助手。你可以将文档上传到知识库，然后向我提问。", isAi: true, sources: [] }
-  ]);
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [showNewChatConfirm, setShowNewChatConfirm] = useState(false);
   const scrollRef = useRef(null);
+
+  const defaultMessage = { text: "你好！我是猪你好运，你的智能助手。你可以将文档上传到知识库，然后向我提问。", isAi: true, sources: [] };
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const fetchHistory = async () => {
+    try {
+      const resp = await fetch("http://localhost:8001/api/history");
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.length > 0) {
+          setMessages(data);
+          return;
+        }
+      }
+    } catch (err) {
+      console.error("获取历史记录失败", err);
+    }
+    setMessages([defaultMessage]);
+  };
+
+  useEffect(() => {
+    // Only save if there's actual conversation beyond the default greeting
+    if (messages.length > 1) {
+      fetch("http://localhost:8001/api/history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages })
+      }).catch(err => console.error("保存历史记录失败", err));
+    }
+  }, [messages]);
+
+  const handleNewChat = async () => {
+    try {
+      await fetch("http://localhost:8001/api/history", { method: "DELETE" });
+      setMessages([defaultMessage]);
+      setShowNewChatConfirm(false);
+    } catch (err) {
+      console.error("清空历史记录失败", err);
+    }
+  };
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -90,6 +132,26 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-full relative">
+      {/* 新对话按钮区域 */}
+      <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+        {showNewChatConfirm && (
+          <div className="flex items-center gap-2 bg-white dark:bg-surface-lighter px-3 py-1.5 rounded-full shadow-lg border border-slate-200 dark:border-surface-lighter animate-fade-in">
+            <span className="text-xs text-slate-500 font-medium">确认清空？</span>
+            <button onClick={() => setShowNewChatConfirm(false)} className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">取消</button>
+            <button onClick={handleNewChat} className="text-xs text-rose-500 hover:text-rose-600 font-medium transition-colors">确认</button>
+          </div>
+        )}
+        {!showNewChatConfirm && (
+          <button
+            onClick={() => setShowNewChatConfirm(true)}
+            className="flex items-center justify-center gap-1.5 bg-white/80 dark:bg-surface-lighter/80 backdrop-blur-sm px-4 py-2 rounded-full text-sm font-medium text-slate-600 dark:text-slate-300 shadow-sm border border-slate-200/60 dark:border-surface-lighter/60 hover:text-primary hover:border-primary/30 transition-all hover:shadow-md"
+          >
+            <span className="material-symbols-outlined text-[18px]">add_comment</span>
+            <span className="hidden sm:inline">新对话</span>
+          </button>
+        )}
+      </div>
+
       <main
         ref={scrollRef}
         className="flex-1 overflow-y-auto w-full flex justify-center py-6 px-4 sm:px-6 scroll-smooth"

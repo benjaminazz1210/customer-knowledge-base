@@ -2,7 +2,9 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from typing import List, Dict, Any
 from ..services.rag_service import RAGService
+from ..services.history_service import HistoryService
 from openai import BadRequestError
 import json
 import asyncio
@@ -10,16 +12,35 @@ import asyncio
 logger = logging.getLogger("nexusai.chat")
 router = APIRouter()
 rag_service = RAGService()
+history_service = HistoryService()
 
 class ChatRequest(BaseModel):
     message: str
+
+class HistoryRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+
+@router.get("/history")
+async def get_history():
+    return history_service.get_history()
+
+@router.post("/history")
+async def save_history(request: HistoryRequest):
+    history_service.save_history("default", request.messages)
+    return {"status": "success"}
+
+@router.delete("/history")
+async def clear_history():
+    history_service.clear_history()
+    return {"status": "success"}
 
 @router.post("/chat")
 async def chat(request: ChatRequest):
     logger.info(f"💬 Chat request: \"{request.message[:80]}{'...' if len(request.message)>80 else ''}\"")
     try:
-        response_gen, sources = rag_service.generate_response(request.message)
-        logger.info(f"   Sources found: {sources}")
+        history = history_service.get_history()
+        response_gen, sources = rag_service.generate_response(request.message, history=history)
+        logger.info(f"   Sources found: {len(sources) if sources else 0} items")
 
         async def stream_response():
             token_count = 0

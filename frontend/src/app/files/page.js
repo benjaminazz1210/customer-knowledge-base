@@ -7,6 +7,7 @@ export default function FilesPage() {
     const [files, setFiles] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
     const [dragActive, setDragActive] = useState(false);
+    const [confirmingDelete, setConfirmingDelete] = useState(null);
 
     useEffect(() => {
         fetchFiles();
@@ -46,8 +47,7 @@ export default function FilesPage() {
         fetchFiles();
     };
 
-    const handleDelete = async (filename) => {
-        if (!confirm(`确定要删除「${filename}」吗？`)) return;
+    const handleDeleteConfirm = async (filename) => {
         try {
             await fetch(`http://localhost:8001/api/files/${filename}`, {
                 method: "DELETE",
@@ -55,6 +55,8 @@ export default function FilesPage() {
             fetchFiles();
         } catch (err) {
             console.error("删除失败", err);
+        } finally {
+            setConfirmingDelete(null);
         }
     };
 
@@ -132,12 +134,19 @@ export default function FilesPage() {
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 text-right">
-                                            <button
-                                                onClick={() => handleDelete(file.filename)}
-                                                className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-lg transition-all"
-                                            >
-                                                <span className="material-symbols-outlined text-xl">delete</span>
-                                            </button>
+                                            {confirmingDelete === file.filename ? (
+                                                <div className="flex justify-end gap-2 animate-fade-in items-center">
+                                                    <button onClick={() => setConfirmingDelete(null)} className="text-xs px-2 py-1 text-slate-500 hover:bg-slate-100 dark:hover:bg-surface-lighter rounded transition-colors">取消</button>
+                                                    <button onClick={() => handleDeleteConfirm(file.filename)} className="text-xs px-2 py-1 bg-rose-500 text-white hover:bg-rose-600 rounded shadow-sm transition-colors">确认删除</button>
+                                                </div>
+                                            ) : (
+                                                <button
+                                                    onClick={() => setConfirmingDelete(file.filename)}
+                                                    className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-lg transition-all"
+                                                >
+                                                    <span className="material-symbols-outlined text-xl">delete</span>
+                                                </button>
+                                            )}
                                         </td>
                                     </tr>
                                 ))

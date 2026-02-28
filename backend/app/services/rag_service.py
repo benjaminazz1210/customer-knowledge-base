@@ -29,7 +29,10 @@ class RAGService:
     def _progress_bar() -> str:
         return "[████████████████████] 100%"
 
-    def generate_response(self, query: str):
+    def generate_response(self, query: str, history: List[Dict[str, Any]] = None):
+        if history is None:
+            history = []
+        
         # Step 1: Embed query
         logger.info(f"[1/4] 🔍 向量化查询中...")
         query_vector = self.embedding_service.get_embeddings([query])[0]
@@ -45,8 +48,6 @@ class RAGService:
         context_parts = []
         source_details = []
         
-        # In case multiple chunks come from the same file, we can either group them or list them individually
-        # We will list them individually so the user can see score and content for each chunk.
         for hit in hits:
             payload = hit["payload"]
             score = hit["score"]
@@ -64,18 +65,23 @@ class RAGService:
             f"参考文档：\n{context_text}"
         )
         
-        # Create a deduped list of filenames just for the simple log
         log_sources = list(set([s["source_file"] for s in source_details]))
         logger.info(f"      {self._progress_bar()}  来源文件: {log_sources}")
 
         # Step 4: Call LLM (streaming)
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Embed chat history
+        for msg in history:
+            role = "assistant" if msg.get("isAi") else "user"
+            messages.append({"role": role, "content": msg.get("text", "")})
+            
+        messages.append({"role": "user", "content": query})
+
         logger.info(f"[4/4] 🤖 调用 LLM 生成回答 (model={config.LLM_MODEL})...")
         response = self.llm_client.chat.completions.create(
             model=config.LLM_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query}
-            ],
+            messages=messages,
             stream=True
         )
         logger.info(f"      {self._progress_bar()}  LLM 开始流式输出...")
