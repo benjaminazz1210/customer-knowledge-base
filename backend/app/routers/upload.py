@@ -37,6 +37,13 @@ async def upload_file(file: UploadFile = File(...)):
             "chunks_count": len(chunks),
             "timestamp": time.time()
         }
+    except HTTPException:
+        # Preserve explicit client-facing status codes (e.g. empty file).
+        raise
+    except ValueError as e:
+        # Parser-level validation errors should be client errors.
+        logger.warning(f"⚠️  Upload rejected for {file.filename}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"❌ Upload failed for {file.filename}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

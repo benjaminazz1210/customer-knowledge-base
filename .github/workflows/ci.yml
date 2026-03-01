@@ -1,0 +1,112 @@
+name: NexusAI CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+      - "feature/**"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: nexusai-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  strict-e2e:
+    name: Strict E2E (daily_3_9)
+    runs-on: self-hosted
+    timeout-minutes: 120
+
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify toolchain
+        run: |
+          set -euo pipefail
+          command -v conda >/dev/null
+          command -v docker >/dev/null
+          command -v node >/dev/null
+          command -v npm >/dev/null
+          command -v curl >/dev/null
+          conda run -n daily_3_9 python -V
+          node -v
+          npm -v
+
+      - name: Ensure Redis and Qdrant are running
+        run: |
+          set -euo pipefail
+
+          ensure_container() {
+            local name="$1"
+            local image="$2"
+            local ports="$3"
+
+            if docker ps --format '{{.Names}}' | grep -qx "$name"; then
+              echo "$name already running"
+              return
+            fi
+
+            if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+              echo "Starting existing container: $name"
+              docker start "$name"
+              return
+            fi
+
+            echo "Creating container: $name"
+            docker run -d --name "$name" $ports "$image"
+          }
+
+          ensure_container ck-redis redis:7-alpine "-p 6379:6379"
+          ensure_container ck-qdrant qdrant/qdrant:latest "-p 6333:6333"
+
+          curl -fsS --retry 30 --retry-delay 2 --retry-connrefused http://127.0.0.1:6333/ >/dev/null
+
+      - name: Install frontend dependencies
+        run: |
+          set -euo pipefail
+          cd frontend
+          npm ci
+
+      - name: Install backend dependencies (daily_3_9)
+        run: |
+          set -euo pipefail
+          conda run -n daily_3_9 pip install -r backend/requirements.txt
+
+      - name: Run strict feature tests
+        env:
+          BASE_URL: http://127.0.0.1:18001
+        run: |
+          set -euo pipefail
+
+          cd backend
+          conda run -n daily_3_9 uvicorn app.main:app --host 127.0.0.1 --port 18001 > /tmp/nexusai-backend.log 2>&1 &
+          BACKEND_PID=$!
+          trap 'kill "${BACKEND_PID}" 2>/dev/null || true' EXIT
+
+          for i in {1..60}; do
+            if curl -fsS "${BASE_URL}/api/health" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+
+          curl -fsS "${BASE_URL}/api/health" >/dev/null
+          cd ..
+
+          conda run -n daily_3_9 python backend/run_tests.py
+
+      - name: Upload backend log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-log
+          path: /tmp/nexusai-backend.log
+          if-no-files-found: ignore

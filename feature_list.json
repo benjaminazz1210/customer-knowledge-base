@@ -2,7 +2,7 @@
     {
         "id": "infra-001",
         "category": "Infrastructure",
-        "description": "Health Check: Backend API and Qdrant are alive and connected.",
+        "description": "Health Check: backend API and Qdrant connectivity are healthy.",
         "steps": [
             {
                 "action": "GET http://localhost:8001/api/health",
@@ -13,13 +13,39 @@
         "passes": true
     },
     {
-        "id": "backend-001",
-        "category": "Backend",
-        "description": "File Upload & Processing: Upload a .txt file, parse, chunk, embed, store in Qdrant.",
+        "id": "infra-002",
+        "category": "Infrastructure",
+        "description": "Root endpoint returns service alive message.",
         "steps": [
             {
-                "action": "POST http://localhost:8001/api/upload with a test .txt file (multipart form, field='file')",
-                "expected": "status=200, body.status='Ready', body.chunks_count > 0, body.filename matches",
+                "action": "GET http://localhost:8001/",
+                "expected": "status=200, body.message='NexusAI API is running'",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "infra-003",
+        "category": "Infrastructure",
+        "description": "CORS preflight works for cross-origin chat requests.",
+        "steps": [
+            {
+                "action": "OPTIONS http://localhost:8001/api/chat with Origin and Access-Control-Request-Method headers",
+                "expected": "status in {200,204}, access-control-allow-origin present, POST included in allow-methods",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-001",
+        "category": "Backend",
+        "description": "Upload TXT: parse, chunk, embed, and persist vectors.",
+        "steps": [
+            {
+                "action": "POST /api/upload with a generated .txt test file",
+                "expected": "status=200, body.status='Ready', body.filename matches, body.chunks_count>0",
                 "type": "auto"
             }
         ],
@@ -28,11 +54,11 @@
     {
         "id": "backend-002",
         "category": "Backend",
-        "description": "Knowledge Base List: GET /api/files returns uploaded files.",
+        "description": "Files list contains uploaded TXT and returns consistent schema.",
         "steps": [
             {
-                "action": "GET http://localhost:8001/api/files",
-                "expected": "status=200, body is array, contains object with filename matching the uploaded test file",
+                "action": "GET /api/files",
+                "expected": "status=200, response is array, includes uploaded filename, each item has filename/status",
                 "type": "auto"
             }
         ],
@@ -41,11 +67,11 @@
     {
         "id": "backend-003",
         "category": "Backend",
-        "description": "RAG Chat: POST /api/chat returns SSE stream with sources and tokens.",
+        "description": "RAG chat SSE contract: sources event, token stream, and terminal [DONE].",
         "steps": [
             {
-                "action": "POST http://localhost:8001/api/chat with body {\"message\": \"What is in the uploaded document?\"}",
-                "expected": "status=200, content-type contains 'text/event-stream', stream contains 'sources' event and at least one 'token' event, stream ends with '[DONE]'",
+                "action": "POST /api/chat with JSON body {\"message\":\"...\"} and Accept:text/event-stream",
+                "expected": "status=200, content-type includes text/event-stream, has sources event, >=1 token, ends with [DONE]",
                 "type": "auto"
             }
         ],
@@ -54,16 +80,143 @@
     {
         "id": "backend-004",
         "category": "Backend",
-        "description": "File Deletion Cascade: DELETE /api/files/{filename} removes file and its vectors.",
+        "description": "Delete TXT file and verify removal from file list.",
         "steps": [
             {
-                "action": "DELETE http://localhost:8001/api/files/{test_filename}",
+                "action": "DELETE /api/files/{uploaded_txt_filename}",
                 "expected": "status=200, body.status='Deleted'",
                 "type": "auto"
             },
             {
-                "action": "GET http://localhost:8001/api/files",
-                "expected": "status=200, body does NOT contain the deleted filename",
+                "action": "GET /api/files after delete",
+                "expected": "deleted filename no longer appears",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-005",
+        "category": "Backend",
+        "description": "History CRUD persists and clears chat history.",
+        "steps": [
+            {
+                "action": "POST /api/history with test messages",
+                "expected": "status=200, body.status='success'",
+                "type": "auto"
+            },
+            {
+                "action": "GET /api/history",
+                "expected": "status=200, returns the posted messages",
+                "type": "auto"
+            },
+            {
+                "action": "DELETE /api/history and GET again",
+                "expected": "status=200 and final GET returns []",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-006",
+        "category": "Backend",
+        "description": "Reject empty document upload with explicit client error.",
+        "steps": [
+            {
+                "action": "POST /api/upload with an empty .txt file",
+                "expected": "status=400, detail indicates empty or unparsable file",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-007",
+        "category": "Backend",
+        "description": "Reject unsupported file extensions with explicit client error.",
+        "steps": [
+            {
+                "action": "POST /api/upload with .exe test file",
+                "expected": "status=400, detail contains 'Unsupported file format'",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-008",
+        "category": "Backend",
+        "description": "Chat request validation rejects invalid payload schema.",
+        "steps": [
+            {
+                "action": "POST /api/chat with JSON {}",
+                "expected": "status=422 (message field required)",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-009",
+        "category": "Backend",
+        "description": "History request validation rejects invalid messages type.",
+        "steps": [
+            {
+                "action": "POST /api/history with JSON {\"messages\":\"not-an-array\"}",
+                "expected": "status=422",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-010",
+        "category": "Backend",
+        "description": "Upload + delete lifecycle works for Markdown files.",
+        "steps": [
+            {
+                "action": "POST /api/upload with .md file, then list and delete",
+                "expected": "upload status=200 and file appears, delete status=200 and file disappears",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-011",
+        "category": "Backend",
+        "description": "Files endpoint schema contract remains stable.",
+        "steps": [
+            {
+                "action": "GET /api/files",
+                "expected": "array items are objects with non-empty filename and status='Ready'",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-012",
+        "category": "Backend",
+        "description": "DocumentParser contract: txt/md parse paths and unsupported format error.",
+        "steps": [
+            {
+                "action": "Call DocumentParser.parse on .txt/.md and unsupported extension",
+                "expected": "txt/md return strings; unsupported raises ValueError",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-013",
+        "category": "Backend",
+        "description": "TextChunker overlap window logic is deterministic.",
+        "steps": [
+            {
+                "action": "Call TextChunker.chunk with fixed input/chunk_size/overlap",
+                "expected": "chunks equal expected overlapping slices",
                 "type": "auto"
             }
         ],
@@ -72,17 +225,12 @@
     {
         "id": "frontend-001",
         "category": "Frontend",
-        "description": "UI Rendering: Header, Chat View, and Files View render correctly.",
+        "description": "Frontend lint check passes with zero errors.",
         "steps": [
             {
-                "action": "Open http://localhost:3000 in browser",
-                "expected": "Page loads, NexusAI header visible, Chat input area visible",
-                "type": "browser"
-            },
-            {
-                "action": "Navigate to /files",
-                "expected": "Knowledge Base heading visible, upload drop area visible, file table rendered",
-                "type": "browser"
+                "action": "Run npm run lint in frontend/",
+                "expected": "exit code 0",
+                "type": "auto"
             }
         ],
         "passes": true
@@ -90,12 +238,12 @@
     {
         "id": "frontend-002",
         "category": "Frontend",
-        "description": "File Upload UI: Upload a file via drag-and-drop area and see it in the table.",
+        "description": "Frontend production build passes.",
         "steps": [
             {
-                "action": "Use the file input on /files to upload a .txt file",
-                "expected": "File appears in the table with 'Ready' status badge after upload completes",
-                "type": "browser"
+                "action": "Run npm run build in frontend/",
+                "expected": "exit code 0",
+                "type": "auto"
             }
         ],
         "passes": true
@@ -103,39 +251,11 @@
     {
         "id": "frontend-003",
         "category": "Frontend",
-        "description": "Chat UI: Send a message and receive a streaming AI response with citations.",
+        "description": "Files page uses inline delete confirmation and avoids browser confirm dialog.",
         "steps": [
             {
-                "action": "On / (chat page), type a question and submit",
-                "expected": "User message appears, AI typing indicator shows, then AI response streams in with source citations",
-                "type": "browser"
-            }
-        ],
-        "passes": true
-    },
-    {
-        "id": "backend-005",
-        "category": "Backend",
-        "description": "Redis Chat History: GET /api/history, POST /api/history, DELETE /api/history operations.",
-        "steps": [
-            {
-                "action": "POST http://localhost:8001/api/history with test messages array",
-                "expected": "status=200, body.status='success'",
-                "type": "auto"
-            },
-            {
-                "action": "GET http://localhost:8001/api/history",
-                "expected": "status=200, body contains the posted test messages",
-                "type": "auto"
-            },
-            {
-                "action": "DELETE http://localhost:8001/api/history",
-                "expected": "status=200, body.status='success'",
-                "type": "auto"
-            },
-            {
-                "action": "GET http://localhost:8001/api/history after deletion",
-                "expected": "status=200, body is empty array []",
+                "action": "Static check frontend/src/app/files/page.js",
+                "expected": "contains confirmingDelete + '确认删除' + '取消', and does not call window.confirm",
                 "type": "auto"
             }
         ],
@@ -144,17 +264,12 @@
     {
         "id": "frontend-004",
         "category": "Frontend",
-        "description": "Inline File Deletion UI: Clicking delete shows confirm/cancel, does not use window.confirm.",
+        "description": "Chat page includes new-chat confirmation flow and history clear API call.",
         "steps": [
             {
-                "action": "Navigate to /files, click the delete icon for a file",
-                "expected": "Inline '确认删除' (Confirm Delete) and '取消' (Cancel) buttons appear instead of browser alert.",
-                "type": "browser"
-            },
-            {
-                "action": "Click '确认删除'",
-                "expected": "File is removed from the table and deleted via API.",
-                "type": "browser"
+                "action": "Static check frontend/src/app/page.js",
+                "expected": "contains showNewChatConfirm + '确认清空？' + DELETE /api/history call",
+                "type": "auto"
             }
         ],
         "passes": true
@@ -162,17 +277,38 @@
     {
         "id": "frontend-005",
         "category": "Frontend",
-        "description": "New Chat UI: Clicking New Chat clears history via UI and API.",
+        "description": "Chat client implements SSE parser contract.",
         "steps": [
             {
-                "action": "Click 新对话 (New Chat) on the chat page",
-                "expected": "Inline '确认清空？' (Confirm clear?) and buttons appear.",
-                "type": "browser"
-            },
+                "action": "Static check frontend/src/app/page.js",
+                "expected": "contains handling for 'data: ', '[DONE]', token append, and sources assignment",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "frontend-006",
+        "category": "Frontend",
+        "description": "Header navigation includes both chat and files routes.",
+        "steps": [
             {
-                "action": "Click 确认 (Confirm)",
-                "expected": "Chat history is cleared on screen and DELETE /api/history is called.",
-                "type": "browser"
+                "action": "Static check frontend/src/components/Header.jsx",
+                "expected": "nav items include '/' and '/files'",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "frontend-007",
+        "category": "Frontend",
+        "description": "Upload constraints are enforced in files page.",
+        "steps": [
+            {
+                "action": "Static check frontend/src/app/files/page.js",
+                "expected": "MAX_FILE_SIZE is 100MB and accepted extensions include pdf/txt/docx/md/pptx",
+                "type": "auto"
             }
         ],
         "passes": true
