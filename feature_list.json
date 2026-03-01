@@ -112,5 +112,69 @@
             }
         ],
         "passes": true
+    },
+    {
+        "id": "backend-005",
+        "category": "Backend",
+        "description": "Redis Chat History: GET /api/history, POST /api/history, DELETE /api/history operations.",
+        "steps": [
+            {
+                "action": "POST http://localhost:8001/api/history with test messages array",
+                "expected": "status=200, body.status='success'",
+                "type": "auto"
+            },
+            {
+                "action": "GET http://localhost:8001/api/history",
+                "expected": "status=200, body contains the posted test messages",
+                "type": "auto"
+            },
+            {
+                "action": "DELETE http://localhost:8001/api/history",
+                "expected": "status=200, body.status='success'",
+                "type": "auto"
+            },
+            {
+                "action": "GET http://localhost:8001/api/history after deletion",
+                "expected": "status=200, body is empty array []",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "frontend-004",
+        "category": "Frontend",
+        "description": "Inline File Deletion UI: Clicking delete shows confirm/cancel, does not use window.confirm.",
+        "steps": [
+            {
+                "action": "Navigate to /files, click the delete icon for a file",
+                "expected": "Inline '确认删除' (Confirm Delete) and '取消' (Cancel) buttons appear instead of browser alert.",
+                "type": "browser"
+            },
+            {
+                "action": "Click '确认删除'",
+                "expected": "File is removed from the table and deleted via API.",
+                "type": "browser"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "frontend-005",
+        "category": "Frontend",
+        "description": "New Chat UI: Clicking New Chat clears history via UI and API.",
+        "steps": [
+            {
+                "action": "Click 新对话 (New Chat) on the chat page",
+                "expected": "Inline '确认清空？' (Confirm clear?) and buttons appear.",
+                "type": "browser"
+            },
+            {
+                "action": "Click 确认 (Confirm)",
+                "expected": "Chat history is cleared on screen and DELETE /api/history is called.",
+                "type": "browser"
+            }
+        ],
+        "passes": true
     }
 ]
