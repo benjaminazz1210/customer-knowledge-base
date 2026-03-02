@@ -16,57 +16,49 @@ concurrency:
 
 jobs:
   strict-e2e:
-    name: Strict E2E (daily_3_9)
-    runs-on: self-hosted
+    name: Strict E2E (CI Mock Backends)
+    runs-on: ubuntu-latest
     timeout-minutes: 120
 
-    defaults:
-      run:
-        shell: bash -l {0}
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
       - name: Verify toolchain
         run: |
           set -euo pipefail
-          command -v conda >/dev/null
-          command -v docker >/dev/null
+          python -V
           command -v node >/dev/null
           command -v npm >/dev/null
           command -v curl >/dev/null
-          conda run -n daily_3_9 python -V
           node -v
           npm -v
 
-      - name: Ensure Redis and Qdrant are running
+      - name: Wait for Qdrant
         run: |
           set -euo pipefail
-
-          ensure_container() {
-            local name="$1"
-            local image="$2"
-            local ports="$3"
-
-            if docker ps --format '{{.Names}}' | grep -qx "$name"; then
-              echo "$name already running"
-              return
-            fi
-
-            if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
-              echo "Starting existing container: $name"
-              docker start "$name"
-              return
-            fi
-
-            echo "Creating container: $name"
-            docker run -d --name "$name" $ports "$image"
-          }
-
-          ensure_container ck-redis redis:7-alpine "-p 6379:6379"
-          ensure_container ck-qdrant qdrant/qdrant:latest "-p 6333:6333"
-
           curl -fsS --retry 30 --retry-delay 2 --retry-connrefused http://127.0.0.1:6333/ >/dev/null
 
       - name: Install frontend dependencies
@@ -75,19 +67,22 @@ jobs:
           cd frontend
           npm ci
 
-      - name: Install backend dependencies (daily_3_9)
+      - name: Install backend dependencies (CI profile)
         run: |
           set -euo pipefail
-          conda run -n daily_3_9 pip install -r backend/requirements.txt
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-ci.txt
 
       - name: Run strict feature tests
         env:
           BASE_URL: http://127.0.0.1:18001
+          NEXUSAI_EMBEDDING_BACKEND: mock
+          NEXUSAI_LLM_BACKEND: mock
         run: |
           set -euo pipefail
 
           cd backend
-          conda run -n daily_3_9 uvicorn app.main:app --host 127.0.0.1 --port 18001 > /tmp/nexusai-backend.log 2>&1 &
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 18001 > /tmp/nexusai-backend.log 2>&1 &
           BACKEND_PID=$!
           trap 'kill "${BACKEND_PID}" 2>/dev/null || true' EXIT
 
@@ -101,7 +96,7 @@ jobs:
           curl -fsS "${BASE_URL}/api/health" >/dev/null
           cd ..
 
-          conda run -n daily_3_9 python backend/run_tests.py
+          python backend/run_tests.py
 
       - name: Upload backend log on failure
         if: failure()

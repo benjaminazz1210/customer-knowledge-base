@@ -1,4 +1,5 @@
 import logging
+import os
 from ..config import config
 from .embedding_service import EmbeddingService
 from .vector_store import VectorStore
@@ -7,10 +8,28 @@ from typing import List, Dict, Any
 
 logger = logging.getLogger("nexusai.rag")
 
+class _MockDelta:
+    def __init__(self, content: str):
+        self.content = content
+
+class _MockChoice:
+    def __init__(self, content: str):
+        self.delta = _MockDelta(content)
+
+class _MockChunk:
+    def __init__(self, content: str):
+        self.choices = [_MockChoice(content)]
+
 class RAGService:
     def __init__(self):
         self.embedding_service = EmbeddingService()
         self.vector_store = VectorStore()
+        self.mock_llm = os.getenv("NEXUSAI_LLM_BACKEND", "").strip().lower() == "mock"
+
+        if self.mock_llm:
+            self.llm_client = None
+            logger.info("🧪 LLM backend: MOCK mode")
+            return
 
         if config.LLM_PROVIDER == "ollama":
             self.llm_client = OpenAI(
@@ -28,6 +47,14 @@ class RAGService:
     @staticmethod
     def _progress_bar() -> str:
         return "[████████████████████] 100%"
+
+    @staticmethod
+    def _mock_stream(answer: str):
+        # Keep token-like chunks so SSE contract remains unchanged for tests/UI.
+        for token in answer.split(" "):
+            if not token:
+                continue
+            yield _MockChunk(token + " ")
 
     def generate_response(self, query: str, history: List[Dict[str, Any]] = None):
         if history is None:
@@ -67,6 +94,15 @@ class RAGService:
         
         log_sources = list(set([s["source_file"] for s in source_details]))
         logger.info(f"      {self._progress_bar()}  来源文件: {log_sources}")
+
+        if self.mock_llm:
+            if source_details:
+                source_files = ", ".join(sorted(set(s["source_file"] for s in source_details)))
+                answer = f"Mock answer based on sources {source_files}. Query: {query}"
+            else:
+                answer = f"Mock answer: no relevant context found. Query: {query}"
+            logger.info("      [MOCK] LLM stream generated")
+            return self._mock_stream(answer), source_details
 
         # Step 4: Call LLM (streaming)
         messages = [{"role": "system", "content": system_prompt}]
