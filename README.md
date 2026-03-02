@@ -157,3 +157,4 @@ conda run -n daily_3_9 python run_tests.py
 - 技术深挖：`TECHNICAL_DEEP_DIVE.md`
 - 功能验收清单：`feature_list.json`
 - 项目进度：`progress.md`
+- 云端部署方案：`CLOUD_DEPLOYMENT_RUNBOOK.md`
