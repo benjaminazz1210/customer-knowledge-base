@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import ChatMessage from "@/components/ChatMessage";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8001";
+
 export default function ChatPage() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -18,7 +20,7 @@ export default function ChatPage() {
 
   const fetchHistory = async () => {
     try {
-      const resp = await fetch("http://localhost:8001/api/history");
+      const resp = await fetch(`${API_BASE_URL}/api/history`);
       if (resp.ok) {
         const data = await resp.json();
         if (data && data.length > 0) {
@@ -35,7 +37,7 @@ export default function ChatPage() {
   useEffect(() => {
     // Only save if there's actual conversation beyond the default greeting
     if (messages.length > 1) {
-      fetch("http://localhost:8001/api/history", {
+      fetch(`${API_BASE_URL}/api/history`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages })
@@ -45,7 +47,7 @@ export default function ChatPage() {
 
   const handleNewChat = async () => {
     try {
-      await fetch("http://localhost:8001/api/history", { method: "DELETE" });
+      await fetch(`${API_BASE_URL}/api/history`, { method: "DELETE" });
       setMessages([defaultMessage]);
       setShowNewChatConfirm(false);
     } catch (err) {
@@ -61,22 +63,34 @@ export default function ChatPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    const userInput = input.trim();
+    if (!userInput || isLoading) return;
 
-    const userMsg = { text: input, isAi: false };
-    setMessages(prev => [...prev, userMsg]);
+    const userMsg = { text: userInput, isAi: false };
+    const aiMsg = { text: "", isAi: true, sources: [] };
+    setMessages(prev => [...prev, userMsg, aiMsg]);
     setInput("");
     setIsLoading(true);
 
-    const aiMsg = { text: "", isAi: true, sources: [] };
-    setMessages(prev => [...prev, aiMsg]);
+    const controller = new AbortController();
 
     try {
-      const response = await fetch("http://localhost:8001/api/chat", {
+      const response = await fetch(`${API_BASE_URL}/api/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input }),
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream"
+        },
+        body: JSON.stringify({ message: userInput }),
+        signal: controller.signal
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      if (!response.body) {
+        throw new Error("响应中缺少可读流");
+      }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -118,6 +132,30 @@ export default function ChatPage() {
           }
         }
       }
+
+      // Flush decoder tail to avoid dropping a partial final chunk.
+      buffer += decoder.decode();
+      if (buffer.trim().startsWith("data: ")) {
+        const dataStr = buffer.trim().slice(6).trim();
+        if (dataStr !== "[DONE]") {
+          try {
+            const data = JSON.parse(dataStr);
+            setMessages(prev => {
+              const newMsgs = [...prev];
+              const last = { ...newMsgs[newMsgs.length - 1] };
+              if (data.token) {
+                last.text += data.token;
+              } else if (data.sources) {
+                last.sources = data.sources;
+              }
+              newMsgs[newMsgs.length - 1] = last;
+              return newMsgs;
+            });
+          } catch (err) {
+            console.error("Error parsing SSE tail data", err);
+          }
+        }
+      }
     } catch (error) {
       console.error("Chat error:", error);
       setMessages(prev => {
@@ -126,6 +164,7 @@ export default function ChatPage() {
         return newMsgs;
       });
     } finally {
+      controller.abort();
       setIsLoading(false);
     }
   };

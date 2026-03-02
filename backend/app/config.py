@@ -11,10 +11,14 @@ class Config(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
 
+    # OpenAI
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+
     # Ollama
     ollama_base_url: str = "http://localhost:11434/v1"
 
-    # LLM Provider: 'deepseek' or 'ollama'
+    # LLM Provider: 'openai' or 'deepseek' or 'ollama'
     llm_provider: str = "ollama"
     llm_model: str = "qwen2.5:14b"
 
@@ -40,6 +44,10 @@ class Config(BaseSettings):
     def DEEPSEEK_API_KEY(self): return self.deepseek_api_key
     @property
     def DEEPSEEK_BASE_URL(self): return self.deepseek_base_url
+    @property
+    def OPENAI_API_KEY(self): return self.openai_api_key
+    @property
+    def OPENAI_BASE_URL(self): return self.openai_base_url
     @property
     def OLLAMA_BASE_URL(self): return self.ollama_base_url
     @property

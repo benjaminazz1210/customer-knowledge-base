@@ -25,24 +25,40 @@ class RAGService:
         self.embedding_service = EmbeddingService()
         self.vector_store = VectorStore()
         self.mock_llm = os.getenv("NEXUSAI_LLM_BACKEND", "").strip().lower() == "mock"
+        self.provider = config.LLM_PROVIDER.strip().lower()
 
         if self.mock_llm:
             self.llm_client = None
             logger.info("🧪 LLM backend: MOCK mode")
             return
 
-        if config.LLM_PROVIDER == "ollama":
+        if self.provider == "ollama":
             self.llm_client = OpenAI(
                 api_key="ollama",  # Ollama doesn't need a real key
                 base_url=config.OLLAMA_BASE_URL,
             )
             logger.info(f"🦙 LLM provider: Ollama ({config.OLLAMA_BASE_URL}) — model: {config.LLM_MODEL}")
-        else:
+        elif self.provider == "deepseek":
+            if not config.DEEPSEEK_API_KEY:
+                raise ValueError("Missing DEEPSEEK_API_KEY for deepseek provider")
             self.llm_client = OpenAI(
                 api_key=config.DEEPSEEK_API_KEY,
                 base_url=config.DEEPSEEK_BASE_URL,
             )
             logger.info(f"🤖 LLM provider: DeepSeek — model: {config.LLM_MODEL}")
+        elif self.provider == "openai":
+            if not config.OPENAI_API_KEY:
+                raise ValueError("Missing OPENAI_API_KEY for openai provider")
+            self.llm_client = OpenAI(
+                api_key=config.OPENAI_API_KEY,
+                base_url=config.OPENAI_BASE_URL,
+            )
+            logger.info(f"🤖 LLM provider: OpenAI ({config.OPENAI_BASE_URL}) — model: {config.LLM_MODEL}")
+        else:
+            raise ValueError(
+                f"Unsupported LLM_PROVIDER={config.LLM_PROVIDER!r}. "
+                "Use one of: openai, deepseek, ollama"
+            )
 
     @staticmethod
     def _progress_bar() -> str:
