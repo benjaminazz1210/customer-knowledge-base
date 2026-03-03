@@ -30,6 +30,11 @@ class Config(BaseSettings):
     qdrant_port: int = 6333
     collection_name: str = "nexusai_knowledge_base"
 
+    # Redis (chat history)
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+
     # Embedding
     embedding_backend: str = "local"  # local|dashscope|aliyun
     embedding_model: str = "Qwen/Qwen3-VL-Embedding-2B"
@@ -80,6 +85,12 @@ class Config(BaseSettings):
     def QDRANT_PORT(self): return self.qdrant_port
     @property
     def COLLECTION_NAME(self): return self.collection_name
+    @property
+    def REDIS_HOST(self): return self.redis_host
+    @property
+    def REDIS_PORT(self): return self.redis_port
+    @property
+    def REDIS_DB(self): return self.redis_db
     @property
     def EMBEDDING_BACKEND(self): return self.embedding_backend
     @property

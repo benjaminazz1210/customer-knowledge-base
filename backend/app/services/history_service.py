@@ -1,12 +1,17 @@
 import json
 import redis
 import logging
+import os
 from typing import List, Dict, Any
+from ..config import config
 
 logger = logging.getLogger("nexusai.history")
 
 class HistoryService:
     def __init__(self, host="localhost", port=6379, db=0):
+        host = str(os.getenv("REDIS_HOST") or host or config.REDIS_HOST)
+        port = int(os.getenv("REDIS_PORT") or port or config.REDIS_PORT)
+        db = int(os.getenv("REDIS_DB") or db or config.REDIS_DB)
         try:
             self.client = redis.Redis(host=host, port=port, db=db, decode_responses=True)
             # Test connection

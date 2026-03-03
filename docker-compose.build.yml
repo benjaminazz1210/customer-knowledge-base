@@ -1,0 +1,14 @@
+services:
+  backend:
+    image: nexusai-backend:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+
+  frontend:
+    image: nexusai-frontend:latest
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: /api
