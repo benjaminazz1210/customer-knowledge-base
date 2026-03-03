@@ -136,6 +136,12 @@ conda run -n daily_3_9 uvicorn app.main:app --reload --port 8001
 # 结构化解析后端: auto|builtin|unstructured|llamaparse
 DOCUMENT_PARSER_BACKEND=auto
 
+# Embedding 后端: local|dashscope|aliyun
+EMBEDDING_BACKEND=dashscope
+EMBEDDING_MODEL=qwen3-vl-embedding
+DASHSCOPE_API_KEY=...
+DASHSCOPE_EMBEDDING_MODEL=qwen3-vl-embedding
+
 # 当选择 llamaparse 或 auto 想启用 LlamaParse 时需要
 LLAMA_CLOUD_API_KEY=...
 
@@ -146,6 +152,7 @@ VISION_MAX_IMAGES=20
 ```
 
 说明：
+- `EMBEDDING_BACKEND=dashscope` 时，向量化走阿里云线上模型，适合低内存 ECS。
 - `DOCUMENT_PARSER_BACKEND=auto` 时优先尝试 `unstructured`，其次 `llamaparse`，失败回退 `builtin`。
 - Vision API 不可用时会自动降级为本地图片统计描述，保证入库流程不断。
 

@@ -31,7 +31,10 @@ class Config(BaseSettings):
     collection_name: str = "nexusai_knowledge_base"
 
     # Embedding
+    embedding_backend: str = "local"  # local|dashscope|aliyun
     embedding_model: str = "Qwen/Qwen3-VL-Embedding-2B"
+    dashscope_api_key: str = ""
+    dashscope_embedding_model: str = "qwen3-vl-embedding"
     vector_dimension: int = 1024
 
     # Chunking
@@ -78,7 +81,13 @@ class Config(BaseSettings):
     @property
     def COLLECTION_NAME(self): return self.collection_name
     @property
+    def EMBEDDING_BACKEND(self): return self.embedding_backend
+    @property
     def EMBEDDING_MODEL(self): return self.embedding_model
+    @property
+    def DASHSCOPE_API_KEY(self): return self.dashscope_api_key
+    @property
+    def DASHSCOPE_EMBEDDING_MODEL(self): return self.dashscope_embedding_model
     @property
     def VECTOR_DIMENSION(self): return self.vector_dimension
     @property
