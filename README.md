@@ -34,20 +34,25 @@ graph TD
 - `backend/app/services/`: 文档解析、分块、嵌入、向量库和 RAG 编排。
 - `Qdrant`: 存储 chunk 向量与 payload。
 - `Redis`: 保存会话历史（`/api/history`）。
-- `LLM`: 通过 OpenAI 兼容接口调用（默认可用 `ollama`，也支持 `deepseek`）。
+- `LLM`: 通过 OpenAI 兼容接口调用（支持 `ollama` / `deepseek` / `openai` / `heiyucode`）。
 
 ## 2. Embedding 具体实现
 
 ### 2.1 文档到向量的上传链路
 1. `POST /api/upload` 读取文件字节流。  
-2. `DocumentParser.parse` 按扩展名解析文本：`.txt/.md/.pdf/.docx/.pptx`。  
-3. `TextChunker.chunk` 进行固定窗口切片（默认 `chunk_size=1000`，`overlap=200`）。  
-4. `EmbeddingService.get_embeddings` 调用 `Qwen3VLEmbedder.process` 生成向量。  
-5. 若模型输出维度 > `config.VECTOR_DIMENSION`（默认 `1024`），执行截断（MRL 友好）。  
-6. `VectorStore.upsert_chunks` 写入 Qdrant，payload 包含：
+2. `DocumentParser.parse_structured` 按扩展名结构化解析：`.txt/.md/.pdf/.docx/.pptx`。  
+3. 解析后保留章节层级（`heading_path/heading_level/section_type`），并抽取文档图片。  
+4. `TextChunker.chunk_structured` 基于结构化段落切片（默认 `chunk_size=1000`，`overlap=200`）。  
+5. `VisionService.describe_images` 为抽取的图片生成描述，并追加为 `image_description` chunk。  
+6. `EmbeddingService.get_embeddings` 调用 `Qwen3VLEmbedder.process` 生成向量。  
+7. 若模型输出维度 > `config.VECTOR_DIMENSION`（默认 `1024`），执行截断（MRL 友好）。  
+8. `VectorStore.upsert_chunks` 写入 Qdrant，payload 包含：
    - `source_file`
    - `chunk_text`
    - `chunk_index`
+   - `heading_path` / `heading_level` / `section_type`
+   - `page` / `slide`（可选）
+   - `image_id` / `image_location`（图片描述 chunk）
 
 ### 2.2 EmbeddingService 关键设计
 - 单例初始化：`EmbeddingService.__new__` 避免重复加载大模型。
@@ -69,7 +74,7 @@ graph TD
 
 ### 3.1 检索增强流程（`RAGService.generate_response`）
 1. 将用户 query 向量化。  
-2. 在 Qdrant 检索 Top-K（当前 `limit=5`）。  
+2. 在 Qdrant 执行混合检索（Hybrid Search：向量 + 关键词，默认 `alpha=0.7`，`limit=5`）。  
 3. 提取命中 chunk，拼接为 `context_text`。  
 4. 构造 `system_prompt`，要求“基于检索文档回答，不可编造”。  
 5. 追加 Redis 历史对话（`/api/history`）并发送给 LLM。  
@@ -125,6 +130,24 @@ cd backend
 conda run -n daily_3_9 pip install -r requirements.txt
 conda run -n daily_3_9 uvicorn app.main:app --reload --port 8001
 ```
+
+### 5.2.1 Phase2 关键配置（.env）
+```bash
+# 结构化解析后端: auto|builtin|unstructured|llamaparse
+DOCUMENT_PARSER_BACKEND=auto
+
+# 当选择 llamaparse 或 auto 想启用 LlamaParse 时需要
+LLAMA_CLOUD_API_KEY=...
+
+# 图片描述（Vision）能力
+VISION_ENABLED=true
+VISION_MODEL=gpt-4o-mini
+VISION_MAX_IMAGES=20
+```
+
+说明：
+- `DOCUMENT_PARSER_BACKEND=auto` 时优先尝试 `unstructured`，其次 `llamaparse`，失败回退 `builtin`。
+- Vision API 不可用时会自动降级为本地图片统计描述，保证入库流程不断。
 
 ### 5.3 Frontend
 ```bash

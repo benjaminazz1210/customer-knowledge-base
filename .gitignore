@@ -45,3 +45,6 @@ logs/
 
 # === Test artifacts ===
 nexusai_test_*.txt
+
+# === Workflow outputs ===
+backend/generated/

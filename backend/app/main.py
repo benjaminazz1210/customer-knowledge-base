@@ -1,7 +1,7 @@
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import upload, files, chat
+from .routers import upload, files, chat, workflows
 from .logging_config import setup_logging
 import uvicorn
 
@@ -31,6 +31,7 @@ async def on_shutdown():
 app.include_router(upload.router, prefix="/api", tags=["Upload"])
 app.include_router(files.router, prefix="/api", tags=["Files"])
 app.include_router(chat.router, prefix="/api", tags=["Chat"])
+app.include_router(workflows.router, prefix="/api", tags=["Workflows"])
 
 @app.get("/")
 async def root():

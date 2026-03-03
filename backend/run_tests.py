@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import uuid
+import io
 from pathlib import Path
 
 import requests
@@ -119,6 +120,15 @@ def _run_cmd(cmd, cwd: Path, timeout: int = 900) -> None:
             f"--- stdout (tail) ---\n{stdout_tail}\n"
             f"--- stderr (tail) ---\n{stderr_tail}"
         )
+
+
+def _tiny_png_bytes() -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    img = Image.new("RGB", (12, 12), color=(42, 96, 180))
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def test_infra_001():
@@ -378,6 +388,140 @@ def test_backend_013():
     assert TextChunker.chunk("", chunk_size=4, overlap=1) == [], "Empty text should return []"
 
 
+def test_backend_014():
+    from docx import Document
+    from docx.shared import Inches
+    from app.services.document_parser import DocumentParser
+    from app.services.text_chunker import TextChunker
+
+    doc = Document()
+    doc.add_heading("Phase2主标题", level=1)
+    doc.add_paragraph("这是结构化解析测试段落。")
+    doc.add_picture(io.BytesIO(_tiny_png_bytes()), width=Inches(0.5))
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    parser = DocumentParser(backend="builtin")
+    parsed = parser.parse_structured(buf.getvalue(), "phase2_structured_test.docx")
+
+    assert parsed.sections, "Expected structured sections for DOCX"
+    assert any(
+        sec.heading_path and sec.heading_path[0] == "Phase2主标题"
+        for sec in parsed.sections
+    ), f"Expected heading path to preserve title, got: {parsed.sections}"
+    assert len(parsed.images) >= 1, "Expected at least one extracted DOCX image"
+
+    chunks = TextChunker.chunk_structured(parsed.sections, chunk_size=80, overlap=10)
+    assert chunks, "Expected structured chunks from parsed sections"
+    first = chunks[0]
+    assert "[结构路径]" in first.get("chunk_text", ""), "Structured chunk missing heading prefix"
+    metadata = first.get("metadata", {})
+    assert isinstance(metadata.get("heading_path"), list) and metadata.get("heading_path"), (
+        f"Structured chunk metadata missing heading_path: {metadata}"
+    )
+    assert metadata.get("section_type"), f"Structured chunk metadata missing section_type: {metadata}"
+
+
+def test_backend_015():
+    from app.services.document_parser import ExtractedImage
+    from app.services.vision_service import VisionService
+
+    old_override = os.environ.get("NEXUSAI_VISION_ENABLED")
+    os.environ["NEXUSAI_VISION_ENABLED"] = "0"
+    try:
+        vision = VisionService()
+        image = ExtractedImage(
+            image_id="phase2_img_1",
+            image_bytes=_tiny_png_bytes(),
+            mime_type="image/png",
+            context="系统架构图",
+            page=1,
+            source_hint="inline_test",
+        )
+        chunks = vision.describe_images([image], source_file="phase2_structured_test.docx")
+    finally:
+        if old_override is None:
+            os.environ.pop("NEXUSAI_VISION_ENABLED", None)
+        else:
+            os.environ["NEXUSAI_VISION_ENABLED"] = old_override
+
+    assert len(chunks) == 1, f"Expected one vision description chunk, got {len(chunks)}"
+    chunk = chunks[0]
+    assert chunk.get("chunk_text", "").startswith("[图片描述]"), f"Invalid image description chunk: {chunk}"
+    metadata = chunk.get("metadata", {})
+    assert metadata.get("section_type") == "image_description", f"Unexpected section_type: {metadata}"
+    assert metadata.get("image_id") == "phase2_img_1", f"Unexpected image_id: {metadata}"
+    assert isinstance(metadata.get("heading_path"), list) and metadata.get("heading_path"), (
+        f"Image description metadata missing heading_path: {metadata}"
+    )
+
+
+def test_backend_016():
+    from app.services.document_parser import DocumentParser, ParsedDocument, StructuredSection
+
+    def _raise_unstructured(*_args, **_kwargs):
+        raise RuntimeError("unstructured unavailable")
+
+    parser_un = DocumentParser(backend="unstructured")
+    parser_un._parse_with_unstructured = lambda *_args, **_kwargs: ParsedDocument(
+        full_text="u",
+        sections=[
+            StructuredSection(
+                heading_path=["Unstructured标题"],
+                heading_level=1,
+                content="unstructured 段落",
+                section_type="paragraph",
+            )
+        ],
+        backend_used="unstructured",
+    )
+    parser_un._extract_images_builtin = lambda *_args, **_kwargs: []
+    parsed_un = parser_un.parse_structured(b"dummy", "dummy.txt")
+    assert parsed_un.backend_used == "unstructured", f"Expected unstructured backend, got {parsed_un.backend_used}"
+
+    parser_auto = DocumentParser(backend="auto")
+    parser_auto._parse_with_unstructured = _raise_unstructured
+    parser_auto._parse_with_llamaparse = lambda *_args, **_kwargs: ParsedDocument(
+        full_text="l",
+        sections=[
+            StructuredSection(
+                heading_path=["LlamaParse标题"],
+                heading_level=1,
+                content="llamaparse 段落",
+                section_type="paragraph",
+            )
+        ],
+        backend_used="llamaparse",
+    )
+    parser_auto._extract_images_builtin = lambda *_args, **_kwargs: []
+    parsed_auto = parser_auto.parse_structured(b"dummy", "dummy.txt")
+    assert parsed_auto.backend_used == "llamaparse", f"Expected llamaparse backend, got {parsed_auto.backend_used}"
+
+
+def test_backend_017():
+    from app.services.workflow_service import WorkflowService
+
+    service = WorkflowService()
+
+    state_third = {
+        "feedback": "把第三点修改一下，改得更详细一点，增加落实路径和考核口径。",
+        "requirements": {"file_type": "docx"},
+    }
+    scoped_third = service._node_human_feedback_router(state_third)
+    scope_third = scoped_third.get("feedback_scope", {})
+    assert scope_third.get("type") == "section", f"Expected section scope, got {scope_third}"
+    assert scope_third.get("index") == 2, f"Expected index=2 for 第三点, got {scope_third}"
+    assert not scope_third.get("inject_kpi"), f"Unexpected inject_kpi for third-point rewrite: {scope_third}"
+
+    state_kpi = {
+        "feedback": "给我生成一个可量化KPI表（按季度考核）",
+        "requirements": {"file_type": "docx"},
+    }
+    scoped_kpi = service._node_human_feedback_router(state_kpi)
+    scope_kpi = scoped_kpi.get("feedback_scope", {})
+    assert scope_kpi.get("inject_kpi") is True, f"Expected inject_kpi for KPI request, got {scope_kpi}"
+
+
 def test_frontend_001():
     _run_cmd(["npm", "run", "lint"], FRONTEND_DIR, timeout=900)
 
@@ -438,6 +582,10 @@ TEST_MAP = {
     "backend-011": test_backend_011,
     "backend-012": test_backend_012,
     "backend-013": test_backend_013,
+    "backend-014": test_backend_014,
+    "backend-015": test_backend_015,
+    "backend-016": test_backend_016,
+    "backend-017": test_backend_017,
     "frontend-001": test_frontend_001,
     "frontend-002": test_frontend_002,
     "frontend-003": test_frontend_003,

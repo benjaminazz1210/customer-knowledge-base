@@ -1,7 +1,33 @@
 import { useState } from 'react';
 
-export default function ChatMessage({ message, isAi, sources }) {
+export default function ChatMessage({ message, isAi, sources, isThinking, isStreaming }) {
     const [expanded, setExpanded] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const showThinking = isAi && isThinking && !message;
+
+    const handleCopy = async () => {
+        if (!message) return;
+
+        try {
+            if (navigator?.clipboard?.writeText) {
+                await navigator.clipboard.writeText(message);
+            } else {
+                const textArea = document.createElement('textarea');
+                textArea.value = message;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-9999px';
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+            }
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        } catch (err) {
+            console.error('复制失败', err);
+        }
+    };
 
     return (
         <div className={`flex items-start gap-4 mb-6 group animate-fade-in ${isAi ? "" : "flex-row-reverse"}`}>
@@ -19,16 +45,38 @@ export default function ChatMessage({ message, isAi, sources }) {
                     ? "bg-white dark:bg-surface-lighter rounded-tl-none border-slate-100 dark:border-transparent text-slate-800 dark:text-slate-200"
                     : "bg-primary text-white rounded-tr-none border-transparent"
                     }`}>
-                    {isAi && message === "" ? (
-                        <div className="flex gap-1.5 items-center h-6">
-                            <div className="w-2 h-2 rounded-full bg-slate-400 animate-pulse" />
-                            <div className="w-2 h-2 rounded-full bg-slate-400 animate-pulse delay-75" />
-                            <div className="w-2 h-2 rounded-full bg-slate-400 animate-pulse delay-150" />
+                    {showThinking ? (
+                        <div className="flex items-center gap-2 min-h-6">
+                            <span className="text-slate-500 dark:text-slate-300 text-sm font-medium">思考中</span>
+                            <div className="flex gap-1.5 items-center">
+                                <div className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-pulse" />
+                                <div className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-pulse delay-75" />
+                                <div className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-pulse delay-150" />
+                            </div>
                         </div>
                     ) : (
-                        <p className="whitespace-pre-wrap">{message}</p>
+                        <p className="whitespace-pre-wrap">
+                            {message}
+                            {isAi && isStreaming && message ? (
+                                <span className="inline-block align-middle ml-1 h-4 w-[2px] bg-primary/70 animate-pulse rounded-full" />
+                            ) : null}
+                        </p>
                     )}
                 </div>
+                {message && (
+                    <div className={`w-full flex ${isAi ? "justify-start" : "justify-end"}`}>
+                        <button
+                            type="button"
+                            onClick={handleCopy}
+                            className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-primary transition-colors"
+                        >
+                            <span className="material-symbols-outlined text-[14px]">
+                                {copied ? "check" : "content_copy"}
+                            </span>
+                            {copied ? "已复制" : "复制"}
+                        </button>
+                    </div>
+                )}
 
                 {isAi && sources && sources.length > 0 && (
                     <div className="mt-2 w-full">

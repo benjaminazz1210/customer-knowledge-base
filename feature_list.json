@@ -223,6 +223,58 @@
         "passes": true
     },
     {
+        "id": "backend-014",
+        "category": "Backend",
+        "description": "Phase2 structured parse preserves heading path and extracts embedded images from DOCX.",
+        "steps": [
+            {
+                "action": "Build in-memory .docx with heading/paragraph/image and call DocumentParser.parse_structured",
+                "expected": "returns sections with heading_path, images_count>0, and structured chunks include metadata",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-015",
+        "category": "Backend",
+        "description": "Phase2 vision pipeline converts extracted images into image description chunks for vector payload.",
+        "steps": [
+            {
+                "action": "Call VisionService.describe_images on extracted image object",
+                "expected": "returns chunk prefixed with '[图片描述]' and metadata.section_type='image_description'",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-016",
+        "category": "Backend",
+        "description": "Phase2 parser backend strategy supports unstructured/llamaparse selection with deterministic fallback.",
+        "steps": [
+            {
+                "action": "Call DocumentParser.parse_structured with stubbed unstructured/llamaparse branches",
+                "expected": "explicit unstructured returns unstructured backend; auto mode falls through to llamaparse when unstructured fails",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
+        "id": "backend-017",
+        "category": "Backend",
+        "description": "Workflow feedback router recognizes 第三点 as section scope and avoids false KPI injection from generic 考核 wording.",
+        "steps": [
+            {
+                "action": "Call WorkflowService._node_human_feedback_router with third-point rewrite and KPI feedback",
+                "expected": "third-point feedback maps to section index 2 without inject_kpi; KPI feedback sets inject_kpi=true",
+                "type": "auto"
+            }
+        ],
+        "passes": true
+    },
+    {
         "id": "frontend-001",
         "category": "Frontend",
         "description": "Frontend lint check passes with zero errors.",

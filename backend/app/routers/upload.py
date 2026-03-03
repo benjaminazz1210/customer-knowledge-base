@@ -4,6 +4,7 @@ from ..services.document_parser import DocumentParser
 from ..services.text_chunker import TextChunker
 from ..services.embedding_service import EmbeddingService
 from ..services.vector_store import VectorStore
+from ..services.vision_service import VisionService
 import time
 
 logger = logging.getLogger("nexusai.upload")
@@ -13,6 +14,7 @@ parser = DocumentParser()
 chunker = TextChunker()
 embedding_service = EmbeddingService()
 vector_store = VectorStore()
+vision_service = VisionService()
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -20,14 +22,32 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         content = await file.read()
         logger.info(f"   File size: {len(content)/1024:.1f} KB")
-        text = parser.parse(content, file.filename)
-        chunks = chunker.chunk(text)
-        
+
+        parsed_doc = parser.parse_structured(content, file.filename)
+        text_chunks = chunker.chunk_structured(parsed_doc.sections)
+        image_chunks = vision_service.describe_images(parsed_doc.images, source_file=file.filename)
+        chunks = text_chunks + image_chunks
+
+        if not chunks and parsed_doc.full_text:
+            # Fallback for edge-case documents with no structural sections
+            chunks = chunker.chunk(parsed_doc.full_text)
+
         if not chunks:
             raise HTTPException(status_code=400, detail="File is empty or could not be parsed.")
-        
-        logger.info(f"   Parsed into {len(chunks)} chunks, generating embeddings...")
-        embeddings = embedding_service.get_embeddings(chunks)
+
+        embedding_texts = [
+            c.get("chunk_text", "") if isinstance(c, dict) else c
+            for c in chunks
+        ]
+
+        logger.info(
+            "   Parsed via %s: %s sections, %s images, %s chunks, generating embeddings...",
+            parsed_doc.backend_used,
+            len(parsed_doc.sections),
+            len(parsed_doc.images),
+            len(chunks),
+        )
+        embeddings = embedding_service.get_embeddings(embedding_texts)
         vector_store.upsert_chunks(file.filename, chunks, embeddings)
         logger.info(f"✅ Upload complete: {file.filename} ({len(chunks)} chunks stored)")
         
@@ -35,6 +55,11 @@ async def upload_file(file: UploadFile = File(...)):
             "filename": file.filename,
             "status": "Ready",
             "chunks_count": len(chunks),
+            "text_chunks_count": len(text_chunks),
+            "image_description_chunks_count": len(image_chunks),
+            "sections_count": len(parsed_doc.sections),
+            "images_count": len(parsed_doc.images),
+            "parser_backend": parsed_doc.backend_used,
             "timestamp": time.time()
         }
     except HTTPException:

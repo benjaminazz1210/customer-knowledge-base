@@ -9,6 +9,7 @@ export default function Header() {
     const navItems = [
         { name: "对话", path: "/" },
         { name: "文件", path: "/files" },
+        { name: "工作流", path: "/workflows" },
     ];
 
     return (

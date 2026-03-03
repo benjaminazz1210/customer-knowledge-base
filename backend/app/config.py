@@ -15,10 +15,13 @@ class Config(BaseSettings):
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
 
+    # LlamaParse
+    llama_cloud_api_key: str = ""
+
     # Ollama
     ollama_base_url: str = "http://localhost:11434/v1"
 
-    # LLM Provider: 'openai' or 'deepseek' or 'ollama'
+    # LLM Provider: 'openai' or 'heiyucode' or 'deepseek' or 'ollama'
     llm_provider: str = "ollama"
     llm_model: str = "qwen2.5:14b"
 
@@ -35,6 +38,18 @@ class Config(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
+    # Phase 2: Structured parsing + vision
+    document_parser_backend: str = "auto"  # auto|builtin|unstructured|llamaparse
+    vision_enabled: bool = True
+    vision_model: str = "gpt-4o-mini"
+    vision_max_images: int = 20
+
+    # Workflow (Phase 3/4)
+    workflow_output_dir: str = "generated"
+    workflow_template_dir: str = "assets/templates"
+    workflow_hybrid_alpha: float = 0.7
+    workflow_max_context_chunks: int = 8
+
     # Server
     port: int = 8001
     debug: bool = True
@@ -48,6 +63,8 @@ class Config(BaseSettings):
     def OPENAI_API_KEY(self): return self.openai_api_key
     @property
     def OPENAI_BASE_URL(self): return self.openai_base_url
+    @property
+    def LLAMA_CLOUD_API_KEY(self): return self.llama_cloud_api_key
     @property
     def OLLAMA_BASE_URL(self): return self.ollama_base_url
     @property
@@ -68,5 +85,21 @@ class Config(BaseSettings):
     def CHUNK_SIZE(self): return self.chunk_size
     @property
     def CHUNK_OVERLAP(self): return self.chunk_overlap
+    @property
+    def DOCUMENT_PARSER_BACKEND(self): return self.document_parser_backend
+    @property
+    def VISION_ENABLED(self): return self.vision_enabled
+    @property
+    def VISION_MODEL(self): return self.vision_model
+    @property
+    def VISION_MAX_IMAGES(self): return self.vision_max_images
+    @property
+    def WORKFLOW_OUTPUT_DIR(self): return self.workflow_output_dir
+    @property
+    def WORKFLOW_TEMPLATE_DIR(self): return self.workflow_template_dir
+    @property
+    def WORKFLOW_HYBRID_ALPHA(self): return self.workflow_hybrid_alpha
+    @property
+    def WORKFLOW_MAX_CONTEXT_CHUNKS(self): return self.workflow_max_context_chunks
 
 config = Config()

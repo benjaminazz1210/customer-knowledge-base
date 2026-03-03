@@ -7,12 +7,95 @@ from ..services.rag_service import RAGService
 from ..services.history_service import HistoryService
 from openai import BadRequestError
 import json
-import asyncio
 
 logger = logging.getLogger("nexusai.chat")
 router = APIRouter()
 rag_service = RAGService()
 history_service = HistoryService()
+
+
+def _get_attr_or_key(obj: Any, key: str) -> Any:
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _normalize_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+
+    parts: List[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+
+        text_val = item.get("text")
+        if isinstance(text_val, dict):
+            text_val = text_val.get("value") or text_val.get("content")
+        if text_val is None:
+            text_val = item.get("value") or item.get("content")
+        if isinstance(text_val, str):
+            parts.append(text_val)
+    return "".join(parts)
+
+
+def _extract_stream_token(chunk: Any) -> str:
+    choices = _get_attr_or_key(chunk, "choices")
+    if not choices or not isinstance(choices, list):
+        return ""
+
+    choice = choices[0]
+
+    # OpenAI-compatible chat stream:
+    # chunk.choices[0].delta.content
+    delta = _get_attr_or_key(choice, "delta")
+    token = _normalize_content(_get_attr_or_key(delta, "content"))
+    if token:
+        return token
+
+    # Some gateways send final text under message.content or text.
+    message = _get_attr_or_key(choice, "message")
+    token = _normalize_content(_get_attr_or_key(message, "content"))
+    if token:
+        return token
+
+    text_val = _get_attr_or_key(choice, "text")
+    return text_val if isinstance(text_val, str) else ""
+
+
+def _chunk_shape(chunk: Any) -> str:
+    choices = _get_attr_or_key(chunk, "choices")
+    if not choices or not isinstance(choices, list):
+        return f"{type(chunk).__name__}(no-choices)"
+
+    first = choices[0]
+    delta = _get_attr_or_key(first, "delta")
+    message = _get_attr_or_key(first, "message")
+    delta_content = _get_attr_or_key(delta, "content")
+    message_content = _get_attr_or_key(message, "content")
+    text_val = _get_attr_or_key(first, "text")
+    return (
+        f"{type(chunk).__name__}("
+        f"delta.content={type(delta_content).__name__}, "
+        f"message.content={type(message_content).__name__}, "
+        f"text={type(text_val).__name__})"
+    )
+
+
+async def _iter_chunks(response_gen):
+    if hasattr(response_gen, "__aiter__"):
+        async for chunk in response_gen:
+            yield chunk
+    else:
+        for chunk in response_gen:
+            yield chunk
 
 class ChatRequest(BaseModel):
     message: str
@@ -44,13 +127,25 @@ async def chat(request: ChatRequest):
 
         async def stream_response():
             token_count = 0
+            chunk_count = 0
+            first_chunk_shape = ""
             yield f"data: {json.dumps({'sources': sources})}\n\n"
             try:
-                for chunk in response_gen:
-                    if chunk.choices[0].delta.content:
-                        token = chunk.choices[0].delta.content
+                async for chunk in _iter_chunks(response_gen):
+                    chunk_count += 1
+                    if not first_chunk_shape:
+                        first_chunk_shape = _chunk_shape(chunk)
+
+                    token = _extract_stream_token(chunk)
+                    if token:
                         token_count += 1
                         yield f"data: {json.dumps({'token': token})}\n\n"
+                if token_count == 0:
+                    logger.warning(
+                        "⚠️ Chat stream ended with 0 text chunks (chunks_seen=%s, first_chunk=%s)",
+                        chunk_count,
+                        first_chunk_shape or "N/A",
+                    )
                 logger.info(f"✅ Chat complete: {token_count} tokens streamed")
             except BadRequestError as e:
                 err_msg = str(e)

@@ -1,5 +1,6 @@
 import logging
 import os
+from urllib.parse import urlparse
 from ..config import config
 from .embedding_service import EmbeddingService
 from .vector_store import VectorStore
@@ -21,6 +22,23 @@ class _MockChunk:
         self.choices = [_MockChoice(content)]
 
 class RAGService:
+    @staticmethod
+    def _normalize_compatible_base_url(base_url: str, provider: str) -> str:
+        normalized = (base_url or "").strip().rstrip("/")
+        if not normalized:
+            return normalized
+
+        parsed = urlparse(normalized)
+        if parsed.path in ("", "/"):
+            fixed = f"{normalized}/v1"
+            logger.warning(
+                "⚠️  %s base_url missing '/v1', auto-normalized to %s",
+                provider,
+                fixed,
+            )
+            return fixed
+        return normalized
+
     def __init__(self):
         self.embedding_service = EmbeddingService()
         self.vector_store = VectorStore()
@@ -33,31 +51,35 @@ class RAGService:
             return
 
         if self.provider == "ollama":
+            base_url = self._normalize_compatible_base_url(config.OLLAMA_BASE_URL, "ollama")
             self.llm_client = OpenAI(
                 api_key="ollama",  # Ollama doesn't need a real key
-                base_url=config.OLLAMA_BASE_URL,
+                base_url=base_url,
             )
-            logger.info(f"🦙 LLM provider: Ollama ({config.OLLAMA_BASE_URL}) — model: {config.LLM_MODEL}")
+            logger.info(f"🦙 LLM provider: Ollama ({base_url}) — model: {config.LLM_MODEL}")
         elif self.provider == "deepseek":
             if not config.DEEPSEEK_API_KEY:
                 raise ValueError("Missing DEEPSEEK_API_KEY for deepseek provider")
+            base_url = self._normalize_compatible_base_url(config.DEEPSEEK_BASE_URL, "deepseek")
             self.llm_client = OpenAI(
                 api_key=config.DEEPSEEK_API_KEY,
-                base_url=config.DEEPSEEK_BASE_URL,
+                base_url=base_url,
             )
-            logger.info(f"🤖 LLM provider: DeepSeek — model: {config.LLM_MODEL}")
-        elif self.provider == "openai":
+            logger.info(f"🤖 LLM provider: DeepSeek ({base_url}) — model: {config.LLM_MODEL}")
+        elif self.provider in ("openai", "heiyucode"):
             if not config.OPENAI_API_KEY:
-                raise ValueError("Missing OPENAI_API_KEY for openai provider")
+                raise ValueError("Missing OPENAI_API_KEY for openai/heiyucode provider")
+            base_url = self._normalize_compatible_base_url(config.OPENAI_BASE_URL, self.provider)
             self.llm_client = OpenAI(
                 api_key=config.OPENAI_API_KEY,
-                base_url=config.OPENAI_BASE_URL,
+                base_url=base_url,
             )
-            logger.info(f"🤖 LLM provider: OpenAI ({config.OPENAI_BASE_URL}) — model: {config.LLM_MODEL}")
+            provider_name = "HeiyuCode" if self.provider == "heiyucode" else "OpenAI"
+            logger.info(f"🤖 LLM provider: {provider_name} ({base_url}) — model: {config.LLM_MODEL}")
         else:
             raise ValueError(
                 f"Unsupported LLM_PROVIDER={config.LLM_PROVIDER!r}. "
-                "Use one of: openai, deepseek, ollama"
+                "Use one of: openai, heiyucode, deepseek, ollama"
             )
 
     @staticmethod
@@ -83,7 +105,12 @@ class RAGService:
 
         # Step 2: Search relevant chunks
         logger.info(f"[2/4] 📚 检索相关文档...")
-        hits = self.vector_store.search(query_vector, limit=5)
+        hits = self.vector_store.hybrid_search(
+            query_text=query,
+            query_vector=query_vector,
+            limit=5,
+            alpha=0.7,
+        )
         logger.info(f"      {self._progress_bar()}  检索到 {len(hits)} 条相关片段")
 
         # Step 3: Build context and track sources
