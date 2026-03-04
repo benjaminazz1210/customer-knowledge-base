@@ -45,6 +45,28 @@ docker load -i nexusai-images.tar
 docker compose up -d
 ```
 
+### 可选：先不使用 Nginx（快速跑通）
+
+当你暂时不想上 Nginx 时，使用 no-nginx 覆盖文件启动，并确保前端构建时 API 基址指向后端地址。
+
+1. 本地构建前端镜像时显式指定 API 地址（示例：云主机公网 IP）：
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://YOUR_SERVER_IP:8001 \
+docker compose -f docker-compose.yml -f docker-compose.build.yml build frontend
+```
+
+2. 云主机启动（禁用 Nginx，直接暴露 `3000/8001`）：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.no-nginx.yml up -d
+```
+
+3. 访问：
+
+- 前端：`http://YOUR_SERVER_IP:3000`
+- 后端健康检查：`http://YOUR_SERVER_IP:8001/api/health`
+
 ## 5. 验证
 
 ```bash
