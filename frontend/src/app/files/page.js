@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import StatusBadge from "@/components/StatusBadge";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+
 export default function FilesPage() {
     const [files, setFiles] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
@@ -15,7 +17,7 @@ export default function FilesPage() {
 
     const fetchFiles = async () => {
         try {
-            const resp = await fetch("http://localhost:8001/api/files");
+            const resp = await fetch(`${API_BASE_URL}/api/files`);
             const data = await resp.json();
             setFiles(data);
         } catch (err) {
@@ -35,7 +37,7 @@ export default function FilesPage() {
             const formData = new FormData();
             formData.append("file", file);
             try {
-                await fetch("http://localhost:8001/api/upload", {
+                await fetch(`${API_BASE_URL}/api/upload`, {
                     method: "POST",
                     body: formData,
                 });
@@ -49,7 +51,7 @@ export default function FilesPage() {
 
     const handleDeleteConfirm = async (filename) => {
         try {
-            await fetch(`http://localhost:8001/api/files/${filename}`, {
+            await fetch(`${API_BASE_URL}/api/files/${filename}`, {
                 method: "DELETE",
             });
             fetchFiles();

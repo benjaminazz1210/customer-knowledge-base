@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import ChatMessage from "@/components/ChatMessage";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8001";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 const ARCHIVE_STORAGE_KEY = "nexusai_chat_archives_v1";
 
 export default function ChatPage() {

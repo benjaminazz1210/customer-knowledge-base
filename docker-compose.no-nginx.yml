@@ -1,0 +1,11 @@
+services:
+  nginx:
+    profiles: ["with-nginx"]
+
+  frontend:
+    ports:
+      - "3000:3000"
+
+  backend:
+    ports:
+      - "8001:8001"
