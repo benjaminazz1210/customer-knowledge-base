@@ -156,6 +156,48 @@ VISION_MAX_IMAGES=20
 - `DOCUMENT_PARSER_BACKEND=auto` 时优先尝试 `unstructured`，其次 `llamaparse`，失败回退 `builtin`。
 - Vision API 不可用时会自动降级为本地图片统计描述，保证入库流程不断。
 
+### 5.2.2 一键切换模型档位（local/cloud）
+
+项目提供脚本：`scripts/switch_profile.py`，用于一次性更新一整套关键字段。
+
+默认会同时更新：
+- `backend/.env`
+- `deploy/backend.env`（存在时）
+
+示例：
+
+```bash
+# 先预览变更（不落盘）
+python3 scripts/switch_profile.py local --dry-run
+
+# 切到本地模型档位（ollama + local embedding + unstructured）
+python3 scripts/switch_profile.py local
+
+# 切到云端模型档位（heiyucode + dashscope + unstructured）
+python3 scripts/switch_profile.py cloud
+```
+
+可选：只改某个文件。
+
+```bash
+python3 scripts/switch_profile.py local --file backend/.env
+```
+
+可选：切换后自动重启 backend 并等待健康检查通过。
+
+```bash
+python3 scripts/switch_profile.py local \
+  --file backend/.env \
+  --restart-backend \
+  --restart-mode local
+```
+
+可选：仅检查当前文件中这些关键配置，不做写入。
+
+```bash
+python3 scripts/switch_profile.py local --check --file backend/.env
+```
+
 ### 5.3 Frontend
 ```bash
 cd frontend
