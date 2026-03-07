@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ChatMessage from "@/components/ChatMessage";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 const ARCHIVE_STORAGE_KEY = "nexusai_chat_archives_v1";
+const DEFAULT_MESSAGE = { text: "你好！我是猪你好运，你的智能助手。你可以将文档上传到知识库，然后向我提问。", isAi: true, sources: [] };
 
 export default function ChatPage() {
   const [messages, setMessages] = useState([]);
@@ -18,28 +19,92 @@ export default function ChatPage() {
   const streamEndedRef = useRef(false);
   const flusherRunningRef = useRef(false);
   const renderDoneResolverRef = useRef(null);
+  const historySaveTimerRef = useRef(null);
+  const historySaveAbortRef = useRef(null);
+  const historyReadyRef = useRef(false);
+  const skipNextHistorySyncRef = useRef(false);
 
-  const defaultMessage = { text: "你好！我是猪你好运，你的智能助手。你可以将文档上传到知识库，然后向我提问。", isAi: true, sources: [] };
-
-  useEffect(() => {
-    fetchHistory();
+  const clearPendingHistorySave = useCallback(() => {
+    if (historySaveTimerRef.current) {
+      clearTimeout(historySaveTimerRef.current);
+      historySaveTimerRef.current = null;
+    }
+    if (historySaveAbortRef.current) {
+      historySaveAbortRef.current.abort();
+      historySaveAbortRef.current = null;
+    }
   }, []);
 
-  const fetchHistory = async () => {
+  const persistHistory = useCallback(async (nextMessages, { immediate = false } = {}) => {
+    clearPendingHistorySave();
+
+    if (!historyReadyRef.current || !Array.isArray(nextMessages) || nextMessages.length <= 1) {
+      return;
+    }
+
+    const hasPendingMessage = nextMessages.some((message) => message?.isThinking || message?.isStreaming);
+    if (hasPendingMessage && !immediate) {
+      return;
+    }
+
+    const saveTask = async () => {
+      const controller = new AbortController();
+      historySaveAbortRef.current = controller;
+      try {
+        const resp = await fetch(`${API_BASE_URL}/api/history`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: nextMessages }),
+          signal: controller.signal
+        });
+        if (!resp.ok) {
+          console.error("保存历史记录失败", resp.status);
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          console.error("保存历史记录失败", err);
+        }
+      } finally {
+        if (historySaveAbortRef.current === controller) {
+          historySaveAbortRef.current = null;
+        }
+      }
+    };
+
+    if (immediate) {
+      await saveTask();
+      return;
+    }
+
+    historySaveTimerRef.current = setTimeout(() => {
+      historySaveTimerRef.current = null;
+      void saveTask();
+    }, 400);
+  }, [clearPendingHistorySave]);
+
+  const fetchHistory = useCallback(async () => {
     try {
       const resp = await fetch(`${API_BASE_URL}/api/history`);
       if (resp.ok) {
         const data = await resp.json();
         if (data && data.length > 0) {
+          skipNextHistorySyncRef.current = true;
           setMessages(data);
+          historyReadyRef.current = true;
           return;
         }
       }
     } catch (err) {
       console.error("获取历史记录失败", err);
     }
-    setMessages([defaultMessage]);
-  };
+    skipNextHistorySyncRef.current = true;
+    setMessages([DEFAULT_MESSAGE]);
+    historyReadyRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
 
   useEffect(() => {
     try {
@@ -84,23 +149,27 @@ export default function ChatPage() {
   };
 
   useEffect(() => {
-    // Only save if there's actual conversation beyond the default greeting
-    if (messages.length > 1) {
-      fetch(`${API_BASE_URL}/api/history`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages })
-      }).catch(err => console.error("保存历史记录失败", err));
+    if (!historyReadyRef.current) return undefined;
+    if (skipNextHistorySyncRef.current) {
+      skipNextHistorySyncRef.current = false;
+      return undefined;
     }
-  }, [messages]);
+
+    void persistHistory(messages);
+    return () => {
+      clearPendingHistorySave();
+    };
+  }, [messages, persistHistory, clearPendingHistorySave]);
 
   const handleNewChat = async ({ archive = false } = {}) => {
     try {
       if (archive) {
         archiveCurrentConversation();
       }
+      clearPendingHistorySave();
       await fetch(`${API_BASE_URL}/api/history`, { method: "DELETE" });
-      setMessages([defaultMessage]);
+      skipNextHistorySyncRef.current = true;
+      setMessages([DEFAULT_MESSAGE]);
       setShowNewChatConfirm(false);
       setShowHistoryPanel(false);
     } catch (err) {
@@ -112,15 +181,13 @@ export default function ChatPage() {
     const item = archivedChats.find((chat) => chat.id === archiveId);
     if (!item) return;
 
-    setMessages(item.messages || [defaultMessage]);
+    clearPendingHistorySave();
+    skipNextHistorySyncRef.current = true;
+    setMessages(item.messages || [DEFAULT_MESSAGE]);
     setShowHistoryPanel(false);
 
     try {
-      await fetch(`${API_BASE_URL}/api/history`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: item.messages || [defaultMessage] })
-      });
+      await persistHistory(item.messages || [DEFAULT_MESSAGE], { immediate: true });
     } catch (err) {
       console.error("恢复聊天记录失败", err);
     }

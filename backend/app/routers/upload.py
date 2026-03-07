@@ -48,7 +48,7 @@ async def upload_file(file: UploadFile = File(...)):
             len(chunks),
         )
         embeddings = embedding_service.get_embeddings(embedding_texts)
-        vector_store.upsert_chunks(file.filename, chunks, embeddings)
+        vector_store.replace_file_chunks(file.filename, chunks, embeddings)
         logger.info(f"✅ Upload complete: {file.filename} ({len(chunks)} chunks stored)")
         
         return {

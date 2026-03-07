@@ -1,62 +1,116 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import StatusBadge from "@/components/StatusBadge";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+
+async function parseErrorMessage(response, fallbackMessage) {
+    try {
+        const data = await response.json();
+        const detail = data?.detail || data?.message;
+        if (detail) {
+            return `${fallbackMessage}：${detail}`;
+        }
+    } catch (err) {
+        try {
+            const text = await response.text();
+            if (text) {
+                return `${fallbackMessage}：${text}`;
+            }
+        } catch {
+        }
+    }
+    return fallbackMessage;
+}
 
 export default function FilesPage() {
     const [files, setFiles] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
     const [dragActive, setDragActive] = useState(false);
     const [confirmingDelete, setConfirmingDelete] = useState(null);
+    const [errorMessage, setErrorMessage] = useState("");
+    const [infoMessage, setInfoMessage] = useState("");
 
-    useEffect(() => {
-        fetchFiles();
-    }, []);
-
-    const fetchFiles = async () => {
+    const fetchFiles = useCallback(async () => {
         try {
             const resp = await fetch(`${API_BASE_URL}/api/files`);
+            if (!resp.ok) {
+                throw new Error(await parseErrorMessage(resp, "获取文件失败"));
+            }
             const data = await resp.json();
             setFiles(data);
         } catch (err) {
             console.error("获取文件失败", err);
+            setErrorMessage(String(err.message || err));
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        fetchFiles();
+    }, [fetchFiles]);
 
     const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
     const handleUpload = async (fileList) => {
+        const nextFiles = Array.from(fileList || []);
+        if (nextFiles.length === 0) return;
+
         setIsUploading(true);
-        for (const file of fileList) {
+        setErrorMessage("");
+        setInfoMessage("");
+
+        const failures = [];
+        let uploadedCount = 0;
+
+        for (const file of nextFiles) {
             if (file.size > MAX_FILE_SIZE) {
-                alert(`「${file.name}」超过 100MB 限制（当前 ${(file.size / 1024 / 1024).toFixed(1)}MB），已跳过。`);
+                failures.push(`「${file.name}」超过 100MB 限制（当前 ${(file.size / 1024 / 1024).toFixed(1)}MB）`);
                 continue;
             }
             const formData = new FormData();
             formData.append("file", file);
             try {
-                await fetch(`${API_BASE_URL}/api/upload`, {
+                const resp = await fetch(`${API_BASE_URL}/api/upload`, {
                     method: "POST",
                     body: formData,
                 });
+                if (!resp.ok) {
+                    failures.push(await parseErrorMessage(resp, `上传「${file.name}」失败`));
+                    continue;
+                }
+                uploadedCount += 1;
             } catch (err) {
                 console.error("上传失败", err);
+                failures.push(`上传「${file.name}」失败：${String(err.message || err)}`);
             }
         }
         setIsUploading(false);
-        fetchFiles();
+        await fetchFiles();
+
+        if (uploadedCount > 0) {
+            setInfoMessage(`成功上传 ${uploadedCount} 个文件。`);
+        }
+        if (failures.length > 0) {
+            setErrorMessage(failures.join("；"));
+        }
     };
 
     const handleDeleteConfirm = async (filename) => {
+        setErrorMessage("");
+        setInfoMessage("");
         try {
-            await fetch(`${API_BASE_URL}/api/files/${filename}`, {
+            const resp = await fetch(`${API_BASE_URL}/api/files/${encodeURIComponent(filename)}`, {
                 method: "DELETE",
             });
-            fetchFiles();
+            if (!resp.ok) {
+                throw new Error(await parseErrorMessage(resp, `删除「${filename}」失败`));
+            }
+            await fetchFiles();
+            setInfoMessage(`已删除「${filename}」。`);
         } catch (err) {
             console.error("删除失败", err);
+            setErrorMessage(String(err.message || err));
         } finally {
             setConfirmingDelete(null);
         }
@@ -70,6 +124,18 @@ export default function FilesPage() {
                     <h1 className="text-2xl font-bold dark:text-white">知识库</h1>
                     <p className="text-slate-500 dark:text-slate-400 text-sm">上传和管理文档，用于 RAG 检索增强生成。</p>
                 </div>
+
+                {errorMessage && (
+                    <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                        {errorMessage}
+                    </div>
+                )}
+
+                {infoMessage && (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                        {infoMessage}
+                    </div>
+                )}
 
                 {/* Upload Area */}
                 <div

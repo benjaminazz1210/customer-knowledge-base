@@ -3,13 +3,15 @@
 run_tests.py — NexusAI strict feature verification
 
 This script executes all `type=auto` checks declared in feature_list.json and
-writes pass/fail status back to that file.
+writes pass/fail status back to that file only when explicitly requested.
 
 Usage:
     cd backend
     python run_tests.py
+    python run_tests.py --write-feature-status
 """
 
+import argparse
 import json
 import os
 import subprocess
@@ -52,6 +54,16 @@ def save_feature_list(features) -> None:
     with FEATURE_LIST_PATH.open("w", encoding="utf-8") as f:
         json.dump(features, f, indent=4, ensure_ascii=False)
         f.write("\n")
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Run NexusAI automated feature checks.")
+    parser.add_argument(
+        "--write-feature-status",
+        action="store_true",
+        help="Persist pass/fail results back into feature_list.json.",
+    )
+    return parser.parse_args(argv)
 
 
 def _create_temp_file(suffix: str, content: str):
@@ -596,7 +608,8 @@ TEST_MAP = {
 }
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    args = parse_args(argv)
     print("🚀 NexusAI Strict Feature Verification Started...\n")
     features = load_feature_list()
 
@@ -640,7 +653,8 @@ def main() -> int:
         _safe_delete_file(TEST_FILENAME_TXT)
         _safe_delete_file(TEST_FILENAME_MD)
         _safe_clear_history()
-        save_feature_list(features)
+        if args.write_feature_status:
+            save_feature_list(features)
 
     print(f"\n{'=' * 70}")
     print(f"Results: {passed_count}/{total_auto} auto tests passed")
@@ -648,7 +662,10 @@ def main() -> int:
         print("🌟 All automated feature tests passed!")
     else:
         print("⚠️  Some tests failed. Check output above.")
-    print(f"📄 Updated: {FEATURE_LIST_PATH.resolve()}")
+    if args.write_feature_status:
+        print(f"📄 Updated: {FEATURE_LIST_PATH.resolve()}")
+    else:
+        print(f"📄 Read-only mode: feature status not written to {FEATURE_LIST_PATH.resolve()}")
     return 0 if all_passed else 1
 
 
