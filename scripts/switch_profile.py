@@ -11,13 +11,33 @@ from typing import Dict, List, Tuple
 PROFILES: Dict[str, Dict[str, str]] = {
     "local": {
         "LLM_PROVIDER": "ollama",
-        "LLM_MODEL": "qwen2.5:7b",
+        "LLM_MODEL": "qwen2.5:14b",
+        "OLLAMA_BASE_URL": "http://localhost:11434/v1",
+        "EMBEDDING_BACKEND": "local",
+        "EMBEDDING_MODEL": "Qwen/Qwen3-VL-Embedding-2B",
+        "DOCUMENT_PARSER_BACKEND": "unstructured",
+        "VISION_ENABLED": "false",
+        "VISION_MODEL": "llama3.2-vision:latest",
+    },
+    "local-safe": {
+        "LLM_PROVIDER": "ollama",
+        "LLM_MODEL": "llama3.2:latest",
+        "OLLAMA_BASE_URL": "http://localhost:11434/v1",
+        "EMBEDDING_BACKEND": "local",
+        "EMBEDDING_MODEL": "Qwen/Qwen3-VL-Embedding-2B",
+        "DOCUMENT_PARSER_BACKEND": "builtin",
+        "VISION_ENABLED": "false",
+        "VISION_MODEL": "llama3.2-vision:latest",
+    },
+    "local-vision": {
+        "LLM_PROVIDER": "ollama",
+        "LLM_MODEL": "qwen2.5:14b",
         "OLLAMA_BASE_URL": "http://localhost:11434/v1",
         "EMBEDDING_BACKEND": "local",
         "EMBEDDING_MODEL": "Qwen/Qwen3-VL-Embedding-2B",
         "DOCUMENT_PARSER_BACKEND": "unstructured",
         "VISION_ENABLED": "true",
-        "VISION_MODEL": "qwen2.5vl:7b",
+        "VISION_MODEL": "llama3.2-vision:latest",
     },
     "cloud": {
         "LLM_PROVIDER": "heiyucode",
@@ -34,6 +54,13 @@ PROFILES: Dict[str, Dict[str, str]] = {
 
 KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 KNOWN_KEYS = sorted({k for p in PROFILES.values() for k in p.keys()})
+
+PROFILE_DESCRIPTIONS: Dict[str, str] = {
+    "local": "本地默认档：Ollama + 本地 embedding + unstructured 解析，适合日常本地开发。",
+    "local-safe": "本地保守档：更轻的本地 LLM + builtin parser + vision 关闭，优先稳定性。",
+    "local-vision": "本地视觉档：保留本地 embedding，并启用本地 vision 模型。",
+    "cloud": "云端档：heiyucode + dashscope，适合云端资源与在线模型。",
+}
 
 
 def _read_lines(path: Path) -> List[str]:
@@ -108,6 +135,14 @@ def _print_check(targets: List[Path], profile_keys: List[str]) -> None:
             print(f"  {key}={kv.get(key, '<missing>')}")
 
 
+
+def _print_profiles() -> None:
+    print("Available profiles:")
+    for name in sorted(PROFILES.keys()):
+        print(f"\n- {name}")
+        print(f"  说明: {PROFILE_DESCRIPTIONS.get(name, '无说明')}")
+        for key, value in PROFILES[name].items():
+            print(f"  {key}={value}")
 def _run_shell(cmd: str, cwd: Path = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         cmd,
@@ -185,7 +220,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="One-click switch between local/cloud model config profiles."
     )
-    parser.add_argument("profile", choices=sorted(PROFILES.keys()), help="profile name")
+    parser.add_argument("profile", nargs="?", choices=sorted(PROFILES.keys()), help="profile name")
+    parser.add_argument(
+        "--list-profiles",
+        action="store_true",
+        help="print all built-in profiles with descriptions and key settings",
+    )
     parser.add_argument(
         "--file",
         dest="files",
@@ -238,6 +278,12 @@ def main() -> int:
         help="seconds to wait for health after restart",
     )
     args = parser.parse_args()
+
+    if args.list_profiles:
+        _print_profiles()
+        return 0
+    if not args.profile:
+        parser.error("profile is required unless --list-profiles is used")
 
     cwd = Path.cwd()
     profile = args.profile

@@ -1,5 +1,5 @@
-/** @type {import('tailwindcss').Config} */
-export default {
+/** @type {import(tailwindcss).Config} */
+const config = {
   content: [
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
@@ -9,7 +9,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        "primary": "#0d59f2",
+        primary: "#0d59f2",
         "background-light": "#f5f6f8",
         "background-dark": "#111318",
         "surface-dark": "#1a1d24",
@@ -17,15 +17,17 @@ export default {
         "border-dark": "#2a3447",
       },
       fontFamily: {
-        "display": ["Inter", "sans-serif"],
+        display: ["Inter", "sans-serif"],
       },
       borderRadius: {
-        "DEFAULT": "0.5rem",
-        "lg": "1rem",
-        "xl": "1.5rem",
-        "full": "9999px"
+        DEFAULT: "0.5rem",
+        lg: "1rem",
+        xl: "1.5rem",
+        full: "9999px",
       },
     },
   },
   plugins: [],
 };
+
+export default config;

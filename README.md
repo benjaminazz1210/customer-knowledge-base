@@ -156,7 +156,7 @@ VISION_MAX_IMAGES=20
 - `DOCUMENT_PARSER_BACKEND=auto` 时优先尝试 `unstructured`，其次 `llamaparse`，失败回退 `builtin`。
 - Vision API 不可用时会自动降级为本地图片统计描述，保证入库流程不断。
 
-### 5.2.2 一键切换模型档位（local/cloud）
+### 5.2.2 一键切换模型档位（local/local-safe/local-vision/cloud）
 
 项目提供脚本：`scripts/switch_profile.py`，用于一次性更新一整套关键字段。
 
@@ -164,16 +164,47 @@ VISION_MAX_IMAGES=20
 - `backend/.env`
 - `deploy/backend.env`（存在时）
 
+内置档位：
+- `local`：本地默认档（`ollama + local embedding + unstructured`）
+- `local-safe`：本地保守档（`ollama + local embedding + builtin parser + vision off`）
+- `local-vision`：本地视觉档（`ollama + local embedding + 本地 vision`）
+- `cloud`：云端档（`heiyucode + dashscope + unstructured`）
+
 示例：
 
 ```bash
+# 先查看所有内置档位与说明
+python3 scripts/switch_profile.py --list-profiles
+
 # 先预览变更（不落盘）
 python3 scripts/switch_profile.py local --dry-run
+```
 
-# 切到本地模型档位（ollama + local embedding + unstructured）
+输出示例（节选）：
+
+```text
+Available profiles:
+
+- local
+  说明: 本地默认档：Ollama + 本地 embedding + unstructured 解析，适合日常本地开发。
+
+- local-safe
+  说明: 本地保守档：更轻的本地 LLM + builtin parser + vision 关闭，优先稳定性。
+```
+
+更多切换示例：
+
+```bash
+# 切到本地默认档
 python3 scripts/switch_profile.py local
 
-# 切到云端模型档位（heiyucode + dashscope + unstructured）
+# 切到本地保守档（更稳、更省资源）
+python3 scripts/switch_profile.py local-safe
+
+# 切到本地视觉档
+python3 scripts/switch_profile.py local-vision
+
+# 切到云端模型档位
 python3 scripts/switch_profile.py cloud
 ```
 
@@ -211,10 +242,14 @@ npm run dev
 ```bash
 cd backend
 conda run -n daily_3_9 python run_tests.py
+
+# 如需把结果回写到 feature_list.json
+conda run -n daily_3_9 python run_tests.py --write-feature-status
 ```
 
 说明：
-- 该脚本会执行 `feature_list.json` 中全部 `auto` 项并回写 `passes`。
+- 默认只读执行 `feature_list.json` 中全部 `auto` 项，不回写仓库文件。
+- 如需更新 `passes` 字段，显式加上 `--write-feature-status`。
 - 覆盖基础设施、后端成功/失败路径、前端 lint/build 与关键静态契约检查。
 
 ### 6.2 GitHub Actions

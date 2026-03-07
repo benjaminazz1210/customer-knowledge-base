@@ -11,8 +11,11 @@ cp deploy/backend.env.example deploy/backend.env
 可选：使用一键脚本切换整套模型配置（默认会更新 `backend/.env` 和 `deploy/backend.env`）：
 
 ```bash
+python3 scripts/switch_profile.py --list-profiles
 python3 scripts/switch_profile.py local --dry-run
 python3 scripts/switch_profile.py local
+python3 scripts/switch_profile.py local-safe
+python3 scripts/switch_profile.py local-vision
 # 或
 python3 scripts/switch_profile.py cloud
 ```

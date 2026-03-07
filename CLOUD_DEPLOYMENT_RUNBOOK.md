@@ -314,6 +314,9 @@ curl -sS "https://kb.your-domain.com/api/workflows/jobs?limit=3"
 ```bash
 cd /opt/nexusai
 BASE_URL=https://kb.your-domain.com conda run -n daily_3_9 python backend/run_tests.py
+
+# 如需把结果回写到 feature_list.json
+BASE_URL=https://kb.your-domain.com conda run -n daily_3_9 python backend/run_tests.py --write-feature-status
 ```
 
 ## 11. 发布与回滚
