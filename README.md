@@ -156,6 +156,16 @@ VISION_MAX_IMAGES=20
 - `DOCUMENT_PARSER_BACKEND=auto` 时优先尝试 `unstructured`，其次 `llamaparse`，失败回退 `builtin`。
 - Vision API 不可用时会自动降级为本地图片统计描述，保证入库流程不断。
 
+本地离线运行可直接参考模板文件：`backend/.env.local.example`。
+
+```bash
+cp backend/.env.local.example backend/.env
+
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  /Users/benjaminz/miniforge3/envs/daily_3_9/bin/python \
+  -m uvicorn app.main:app --port 8001
+```
+
 ### 5.2.2 一键切换模型档位（local/local-safe/local-vision/cloud）
 
 项目提供脚本：`scripts/switch_profile.py`，用于一次性更新一整套关键字段。
