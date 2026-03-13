@@ -9,6 +9,7 @@ from ..services.ab_test import ABTestManager
 from ..services.document_version_service import DocumentVersionService
 from ..services.embedding_service import EmbeddingService
 from ..services.feedback_service import FeedbackService
+from ..services.graph_store import GraphStore
 from ..services.rag_service import RAGService
 from ..services.vector_store import VectorStore
 
@@ -20,6 +21,7 @@ feedback_service = FeedbackService()
 version_service = DocumentVersionService()
 embedding_service = EmbeddingService()
 vector_store = VectorStore()
+graph_store = GraphStore()
 
 
 def require_admin(x_admin_api_key: Optional[str] = Header(default=None)):
@@ -85,17 +87,29 @@ async def get_document_versions(filename: str):
 
 @router.post("/documents/rollback/{filename}", dependencies=[Depends(require_admin)])
 async def rollback_document(filename: str, version_id: str = Query(...)):
-    version = version_service.get_version(filename, version_id)
-    if not version:
+    restore_plan = version_service.rollback(filename, version_id)
+    if not restore_plan:
         raise HTTPException(status_code=404, detail="Version not found")
 
-    chunks = version.get("chunks", [])
-    embedding_texts = [str(chunk.get("chunk_text", "")) for chunk in chunks if isinstance(chunk, dict)]
-    embeddings = embedding_service.get_embeddings(embedding_texts)
+    chunks = restore_plan.get("chunks", [])
+    embeddings = restore_plan.get("embeddings", [])
+    if len(embeddings) != len(chunks):
+        embedding_texts = [str(chunk.get("chunk_text", "")) for chunk in chunks if isinstance(chunk, dict)]
+        embeddings = embedding_service.get_embeddings(embedding_texts)
     vector_store.replace_file_chunks(filename, chunks, embeddings)
+    if hasattr(graph_store, "replace_document"):
+        graph_store.replace_document(filename, chunks)
+    elif config.graph_rag_enabled:
+        graph_store.ingest_document(filename, chunks)
     return {
         "status": "rolled_back",
         "filename": filename,
         "version_id": version_id,
         "chunks_count": len(chunks),
+        "restored_points_count": len(embeddings),
+        "restored_chunk_hashes": [
+            str(chunk.get("metadata", {}).get("chunk_hash"))
+            for chunk in chunks
+            if isinstance(chunk, dict) and chunk.get("metadata", {}).get("chunk_hash")
+        ],
     }

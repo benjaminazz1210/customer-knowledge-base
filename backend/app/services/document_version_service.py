@@ -36,12 +36,71 @@ class DocumentVersionService:
 
     compute_hash = compute_content_hash
 
+    @classmethod
+    def compute_chunk_hash(cls, chunk_text: str) -> str:
+        return cls.compute_content_hash((chunk_text or "").encode("utf-8"))
+
     @staticmethod
     def generate_version_id() -> str:
         return str(uuid.uuid4())
 
     def _key(self, filename: str) -> str:
         return f"document:versions:{filename}"
+
+    @staticmethod
+    def _payload(chunk: Any) -> Dict[str, Any]:
+        if isinstance(chunk, dict) and "payload" in chunk:
+            return dict(chunk.get("payload", {}) or {})
+        if isinstance(chunk, dict):
+            payload = {key: value for key, value in chunk.items() if key != "metadata"}
+            metadata = chunk.get("metadata", {}) or {}
+            for key, value in metadata.items():
+                payload.setdefault(key, value)
+            return payload
+        return dict(chunk or {})
+
+    @classmethod
+    def chunk_identity(cls, chunk: Any, fallback_index: int = 0) -> str:
+        payload = cls._payload(chunk)
+        delta_key = payload.get("delta_key")
+        if delta_key:
+            return str(delta_key)
+        chunk_hash = payload.get("chunk_hash")
+        if chunk_hash:
+            return str(chunk_hash)
+        chunk_index = payload.get("chunk_index", fallback_index)
+        return f"chunk-index:{chunk_index}"
+
+    @classmethod
+    def index_chunks(cls, chunks: List[Any]) -> Dict[str, Dict[str, Any]]:
+        indexed: Dict[str, Dict[str, Any]] = {}
+        for idx, chunk in enumerate(chunks or []):
+            payload = cls._payload(chunk)
+            indexed[cls.chunk_identity(payload, fallback_index=idx)] = payload
+        return indexed
+
+    @classmethod
+    def diff_chunks(cls, old_chunks: List[Any], new_chunks: List[Any]) -> Dict[str, Any]:
+        old_index = cls.index_chunks(old_chunks)
+        new_index = cls.index_chunks(new_chunks)
+        added: List[Dict[str, Any]] = []
+        unchanged: List[Dict[str, Any]] = []
+
+        for idx, chunk in enumerate(new_chunks or []):
+            payload = cls._payload(chunk)
+            identity = cls.chunk_identity(payload, fallback_index=idx)
+            if old_index.get(identity) is None:
+                added.append(payload)
+                continue
+            unchanged.append(payload)
+
+        deleted = [identity for identity in old_index.keys() if identity not in new_index]
+        return {
+            "added": added,
+            "updated": [],
+            "deleted": deleted,
+            "unchanged": unchanged,
+        }
 
     def _set_versions(self, filename: str, versions: List[Dict[str, Any]]) -> None:
         key = self._key(filename)
@@ -80,6 +139,7 @@ class DocumentVersionService:
         *,
         version_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        embeddings: Optional[List[List[float]]] = None,
     ) -> Dict[str, Any]:
         versions = self.get_versions(filename)
         record = {
@@ -92,6 +152,7 @@ class DocumentVersionService:
             "chunk_ids": chunks,
             "raw_content": raw_content or "",
             "metadata": metadata or {},
+            "embeddings": embeddings or [],
         }
         versions.append(record)
         self._set_versions(filename, versions)
@@ -107,4 +168,11 @@ class DocumentVersionService:
         version = self.get_version(filename, version_id)
         if version is None:
             raise ValueError(f"Version {version_id} not found for {filename}")
-        return version
+        return {
+            "filename": filename,
+            "version_id": version_id,
+            "chunks": version.get("chunks", []),
+            "embeddings": version.get("embeddings", []),
+            "content_hash": version.get("content_hash"),
+            "metadata": version.get("metadata", {}),
+        }

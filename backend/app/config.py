@@ -83,6 +83,9 @@ class Config(BaseSettings):
     guardrails_check_pii: bool = True
     guardrails_check_injection: bool = True
     guardrails_check_toxicity: bool = True
+    guardrails_stream_holdback_chars: int = 96
+    guardrails_stream_min_release_chars: int = 48
+    guardrails_presidio_enabled: bool = False
 
     low_confidence_enabled: bool = False
     low_confidence_strategy: str = "score_threshold"  # score_threshold | llm_judge
@@ -90,6 +93,8 @@ class Config(BaseSettings):
     low_confidence_message: str = (
         "I don't have enough information in the knowledge base to answer that question accurately."
     )
+    low_confidence_log_path: str = "generated/low_confidence_events.jsonl"
+    low_confidence_ttl_days: int = 90
 
     # Advanced capabilities
     self_rag_enabled: bool = False
@@ -100,7 +105,9 @@ class Config(BaseSettings):
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: Optional[str] = None
+    graph_entity_extraction_backend: str = "auto"  # auto | regex | spacy | llm
     graph_entity_extraction_model: Optional[str] = None
+    graph_spacy_model: str = "en_core_web_sm"
     graph_max_hops: int = 2
 
     experiments_config_path: str = "backend/app/experiments.yml"

@@ -198,15 +198,26 @@ async def chat(request: ChatRequest):
             )
             try:
                 if config.guardrails_enabled:
-                    buffered = ""
+                    stream_state = guardrails_service.begin_output_stream()
                     async for chunk in _iter_chunks(response_gen):
-                        buffered += _extract_stream_token(chunk)
-                    checked = guardrails_service.check_output(buffered)
-                    final_text = checked.sanitized_text or checked.message or config.guardrails_block_message
-                    for token in final_text.split(" "):
-                        if token:
-                            rendered_tokens.append(token + " ")
-                            yield "data: %s\n\n" % json.dumps({"token": token + " "})
+                        token = _extract_stream_token(chunk)
+                        if not token:
+                            continue
+                        checked = guardrails_service.check_output_chunk(token, state=stream_state)
+                        if checked.emit_text:
+                            rendered_tokens.append(checked.emit_text)
+                            yield "data: %s\n\n" % json.dumps({"token": checked.emit_text})
+                        if not checked.allowed:
+                            break
+                    if not stream_state.blocked:
+                        checked = guardrails_service.check_output_chunk("", state=stream_state, final=True)
+                        if checked.emit_text:
+                            rendered_tokens.append(checked.emit_text)
+                            yield "data: %s\n\n" % json.dumps({"token": checked.emit_text})
+                        if not checked.allowed and not rendered_tokens:
+                            fallback = checked.message or config.guardrails_block_message
+                            rendered_tokens.append(fallback)
+                            yield "data: %s\n\n" % json.dumps({"token": fallback})
                 else:
                     async for chunk in _iter_chunks(response_gen):
                         token = _extract_stream_token(chunk)
