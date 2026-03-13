@@ -7,7 +7,7 @@ dashscope>=1.22.0
 langgraph>=0.2.35
 unstructured>=0.15.10
 llama-parse==0.6.94
-python-dotenv==1.0.0
+python-dotenv==1.0.1
 pydantic-settings>=2.0
 pypdf==3.17.1
 python-docx==1.1.0
