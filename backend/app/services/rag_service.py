@@ -110,6 +110,14 @@ class RAGService:
         return None
 
     @staticmethod
+    def _estimate_tokens(text: Any) -> int:
+        if not text:
+            return 0
+        if isinstance(text, list):
+            return sum(RAGService._estimate_tokens(item) for item in text)
+        return len(str(text).split())
+
+    @staticmethod
     def _setting(overrides: Optional[Dict[str, Any]], key: str, default: Any) -> Any:
         if overrides and key in overrides:
             return overrides[key]
@@ -173,10 +181,19 @@ class RAGService:
         search_queries = transformed_query.search_queries or [query]
         for search_query in search_queries:
             embedding_query = transformed_query.embedding_query if transformed_query.strategy == "hyde" else search_query
-            with tracer.step("embedding", input_size=len(embedding_query)):
+            with tracer.step(
+                "embedding",
+                input_size=len(embedding_query),
+                input_tokens=self._estimate_tokens(embedding_query),
+            ):
                 query_vector = self.embedding_service.get_embeddings([embedding_query])[0]
 
-            with tracer.step("retrieve", query=search_query, top_n=search_limit):
+            with tracer.step(
+                "retrieve",
+                query=search_query,
+                top_n=search_limit,
+                input_tokens=self._estimate_tokens(search_query),
+            ):
                 hits = self.vector_store.hybrid_search(
                     query_text=search_query,
                     query_vector=query_vector,
@@ -215,7 +232,12 @@ class RAGService:
         api_key = self._setting(overrides, "reranker_api_key", config.reranker_api_key)
         if not reranker_enabled:
             return hits[:top_k]
-        with tracer.step("rerank", candidate_count=len(hits)):
+        with tracer.step(
+            "rerank",
+            candidate_count=len(hits),
+            input_tokens=self._estimate_tokens(query),
+            retrieval_scores=[round(float(hit.get("score", 0.0)), 4) for hit in hits[:top_n]],
+        ):
             reranked = self.reranker.rerank_hits(
                 query,
                 hits[:top_n],
@@ -324,7 +346,7 @@ class RAGService:
         )
 
         if config.self_rag_enabled:
-            with tracer.step("self_rag_decision", input_size=len(query)):
+            with tracer.step("self_rag_decision", input_size=len(query), input_tokens=self._estimate_tokens(query)):
                 should_skip = self.self_rag.should_skip_retrieval(query)
             if should_skip:
                 return self._build_response(
@@ -337,7 +359,7 @@ class RAGService:
                     metadata={"self_rag_skipped_retrieval": True},
                 )
 
-        with tracer.step("query_transform", input_size=len(query)):
+        with tracer.step("query_transform", input_size=len(query), input_tokens=self._estimate_tokens(query)):
             transformed_query = self._transform_query(query, overrides=overrides)
 
         hits = []
@@ -346,7 +368,13 @@ class RAGService:
             confidence_score = self.confidence_service.score_hits(hits)
             if not config.self_rag_enabled:
                 break
-            with tracer.step("self_rag_critique", attempt=attempt, retrieved=len(hits), confidence_score=confidence_score):
+            with tracer.step(
+                "self_rag_critique",
+                attempt=attempt,
+                retrieved=len(hits),
+                confidence_score=confidence_score,
+                retrieval_scores=[round(float(hit.get("score", 0.0)), 4) for hit in hits[:5]],
+            ):
                 critique_passed = self.self_rag.critique_hits(query, hits, confidence_score)
             if critique_passed:
                 break
@@ -361,12 +389,24 @@ class RAGService:
         low_confidence = bool(confidence_assessment.get("is_low_confidence", False))
         confidence_score = float(confidence_assessment.get("confidence_score", 0.0))
 
-        with tracer.step("context", retrieved=len(hits), confidence_score=confidence_score):
+        with tracer.step(
+            "context",
+            retrieved=len(hits),
+            confidence_score=confidence_score,
+            retrieval_scores=confidence_assessment.get("score_details", {}).get("scores"),
+            input_tokens=self._estimate_tokens(query),
+        ):
             context_text = self._build_context(hits)
             source_details = self._source_details_from_hits(hits)
 
         if low_confidence:
-            logger.info("⚠️ Low confidence triggered for query=%r score=%.4f", query, confidence_score)
+            event = self.confidence_service.log_event(
+                query=query,
+                hits=hits,
+                assessment=confidence_assessment,
+                trace_id=tracer.trace_id,
+                session_id=session_id,
+            )
             return self._build_response(
                 tracer=tracer,
                 response_gen=self._mock_stream(config.low_confidence_message),
@@ -374,7 +414,11 @@ class RAGService:
                 confidence_score=confidence_score,
                 experiment_id=experiment_id,
                 variant_id=variant_id,
-                metadata={"low_confidence": True},
+                metadata={
+                    "low_confidence": True,
+                    "low_confidence_event_id": event.get("event_id"),
+                    "confidence_details": confidence_assessment.get("score_details", {}),
+                },
             )
 
         if self.mock_llm:
@@ -393,7 +437,13 @@ class RAGService:
             )
 
         if config.self_rag_enabled:
-            with tracer.step("generate", prompt_size=len(context_text), history_size=len(history), mode="self_rag_non_stream"):
+            with tracer.step(
+                "generate",
+                prompt_size=len(context_text),
+                history_size=len(history),
+                mode="self_rag_non_stream",
+                input_tokens=self._estimate_tokens(context_text) + self._estimate_tokens(query),
+            ):
                 messages = self._build_messages(query, history, context_text)
                 response = self.llm_client.chat.completions.create(
                     model=config.llm_model,
@@ -401,7 +451,11 @@ class RAGService:
                     stream=False,
                 )
                 answer = self._completion_text(response)
-            with tracer.step("self_rag_answer_check", answer_size=len(answer)):
+            with tracer.step(
+                "self_rag_answer_check",
+                answer_size=len(answer),
+                output_tokens=self._estimate_tokens(answer),
+            ):
                 if not self.self_rag.critique_answer(query, answer, hits):
                     retry_response = self.llm_client.chat.completions.create(
                         model=config.llm_model,
@@ -416,10 +470,18 @@ class RAGService:
                 confidence_score=confidence_score,
                 experiment_id=experiment_id,
                 variant_id=variant_id,
-                metadata={"self_rag_answer_checked": True},
+                metadata={
+                    "self_rag_answer_checked": True,
+                    "confidence_details": confidence_assessment.get("score_details", {}),
+                },
             )
 
-        with tracer.step("generate", prompt_size=len(context_text), history_size=len(history)):
+        with tracer.step(
+            "generate",
+            prompt_size=len(context_text),
+            history_size=len(history),
+            input_tokens=self._estimate_tokens(context_text) + self._estimate_tokens(query),
+        ):
             messages = self._build_messages(query, history, context_text)
             response = self.llm_client.chat.completions.create(
                 model=config.llm_model,
@@ -434,6 +496,7 @@ class RAGService:
             confidence_score=confidence_score,
             experiment_id=experiment_id,
             variant_id=variant_id,
+            metadata={"confidence_details": confidence_assessment.get("score_details", {})},
         )
 
     def generate_answer_text(

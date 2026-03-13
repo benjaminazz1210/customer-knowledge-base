@@ -16,6 +16,8 @@ METADATA_FIELDS = (
     "children_ids",
     "content_hash",
     "version_id",
+    "chunk_hash",
+    "delta_key",
     "heading_path",
     "heading_level",
     "section_type",
@@ -198,7 +200,7 @@ def run_reindex(
                 payload["child_id"] = chunk["child_id"]
             points.append(
                 models.PointStruct(
-                    id=VectorStore._build_point_id(filename, idx),
+                    id=VectorStore._point_id_for_payload(filename, payload),
                     vector=vector,
                     payload=payload,
                 )

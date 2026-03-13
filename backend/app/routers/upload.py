@@ -56,39 +56,69 @@ async def upload_file(file: UploadFile = File(...)):
         version_id = version_service.generate_version_id()
 
         prepared_chunks = []
+        chunk_hash_counts = {}
         for chunk in chunks:
             if isinstance(chunk, dict):
                 metadata = dict(chunk.get("metadata", {}))
                 chunk_text = str(chunk.get("chunk_text", ""))
+                chunk_hash = version_service.compute_content_hash(chunk_text.encode("utf-8"))
+                chunk_ordinal = chunk_hash_counts.get(chunk_hash, 0)
+                chunk_hash_counts[chunk_hash] = chunk_ordinal + 1
                 metadata.update(
                     {
                         "content_hash": content_hash,
                         "version_id": version_id,
-                        "chunk_hash": version_service.compute_content_hash(chunk_text.encode("utf-8")),
+                        "chunk_hash": chunk_hash,
+                        "delta_key": f"{chunk_hash}:{chunk_ordinal}",
                     }
                 )
                 prepared_chunks.append({**chunk, "metadata": metadata})
             else:
                 chunk_text = str(chunk)
+                chunk_hash = version_service.compute_content_hash(chunk_text.encode("utf-8"))
+                chunk_ordinal = chunk_hash_counts.get(chunk_hash, 0)
+                chunk_hash_counts[chunk_hash] = chunk_ordinal + 1
                 prepared_chunks.append(
                     {
                         "chunk_text": chunk_text,
                         "metadata": {
                             "content_hash": content_hash,
                             "version_id": version_id,
-                            "chunk_hash": version_service.compute_content_hash(chunk_text.encode("utf-8")),
+                            "chunk_hash": chunk_hash,
+                            "delta_key": f"{chunk_hash}:{chunk_ordinal}",
                         },
                     }
                 )
 
         existing_chunks = vector_store.get_file_chunks(file.filename, include_vectors=True)
+        existing_payloads = []
         existing_vectors = {}
+        existing_hash_counts = {}
         for row in existing_chunks:
             payload = row.get("payload", {}) or {}
-            chunk_hash = payload.get("chunk_hash")
+            chunk_hash = str(payload.get("chunk_hash", ""))
+            if chunk_hash and not payload.get("delta_key"):
+                chunk_ordinal = existing_hash_counts.get(chunk_hash, 0)
+                existing_hash_counts[chunk_hash] = chunk_ordinal + 1
+                payload = {**payload, "delta_key": f"{chunk_hash}:{chunk_ordinal}"}
+            chunk_key = version_service.chunk_identity(payload, fallback_index=int(payload.get("chunk_index", 0) or 0))
             vector = row.get("vector")
-            if chunk_hash and vector:
-                existing_vectors[str(chunk_hash)] = vector
+            existing_payloads.append(payload)
+            if chunk_key and vector is not None:
+                existing_vectors[str(chunk_key)] = vector
+            if chunk_hash and vector is not None:
+                existing_vectors[chunk_hash] = vector
+
+        diff = version_service.diff_chunks(existing_payloads, prepared_chunks)
+        upsert_keys = {
+            version_service.chunk_identity(chunk, fallback_index=idx)
+            for idx, chunk in enumerate(prepared_chunks)
+            if version_service.chunk_identity(chunk, fallback_index=idx)
+            in {
+                version_service.chunk_identity(payload)
+                for payload in diff["added"] + diff.get("updated", [])
+            }
+        }
 
         embedding_texts = []
         embedding_indexes = []
@@ -96,8 +126,8 @@ async def upload_file(file: UploadFile = File(...)):
         reused_embeddings = 0
         for idx, chunk in enumerate(prepared_chunks):
             metadata = chunk.get("metadata", {}) if isinstance(chunk, dict) else {}
-            chunk_hash = str(metadata.get("chunk_hash", ""))
-            reused_vector = existing_vectors.get(chunk_hash)
+            chunk_key = str(metadata.get("delta_key") or metadata.get("chunk_hash") or "")
+            reused_vector = existing_vectors.get(chunk_key)
             if reused_vector is not None:
                 embeddings[idx] = reused_vector
                 reused_embeddings += 1
@@ -120,17 +150,39 @@ async def upload_file(file: UploadFile = File(...)):
         if any(vector is None for vector in embeddings):
             raise RuntimeError("embedding generation did not return a vector for every chunk")
         embeddings = list(embeddings)
-        vector_store.replace_file_chunks(file.filename, prepared_chunks, embeddings)
-        graph_store.ingest_document(file.filename, prepared_chunks)
+        chunks_to_upsert = []
+        embeddings_to_upsert = []
+        for idx, chunk in enumerate(prepared_chunks):
+            chunk_key = version_service.chunk_identity(chunk, fallback_index=idx)
+            if chunk_key in upsert_keys:
+                chunks_to_upsert.append(chunk)
+                embeddings_to_upsert.append(embeddings[idx])
+        vector_store.sync_file_chunks(
+            file.filename,
+            chunks_to_upsert,
+            embeddings_to_upsert,
+            deleted_chunk_keys=diff["deleted"],
+        )
+        if hasattr(graph_store, "replace_document"):
+            graph_store.replace_document(file.filename, prepared_chunks)
+        else:
+            graph_store.ingest_document(file.filename, prepared_chunks)
         version_record = version_service.record_version(
             filename=file.filename,
             content_hash=content_hash,
             chunks=prepared_chunks,
             raw_content=parsed_doc.full_text,
             version_id=version_id,
+            embeddings=embeddings,
             metadata={
                 "parser_backend": parsed_doc.backend_used,
                 "sections": [asdict(section) for section in parsed_doc.sections],
+                "delta": {
+                    "added": len(diff["added"]),
+                    "updated": len(diff.get("updated", [])),
+                    "deleted": len(diff["deleted"]),
+                    "unchanged": len(diff["unchanged"]),
+                },
             },
         )
         logger.info("✅ Upload complete: %s (%s chunks stored)", file.filename, len(prepared_chunks))
@@ -147,6 +199,8 @@ async def upload_file(file: UploadFile = File(...)):
             "version_id": version_record["version_id"],
             "content_hash": content_hash,
             "reused_embeddings": reused_embeddings,
+            "delta_added": len(diff["added"]),
+            "delta_deleted": len(diff["deleted"]),
             "timestamp": time.time(),
         }
     except HTTPException:

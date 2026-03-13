@@ -60,7 +60,7 @@ class VectorStore:
 
     def _ensure_payload_indexes(self, collection_name: Optional[str] = None):
         name = collection_name or config.collection_name
-        for field_name in ("source_file", "parent_id", "version_id", "content_hash"):
+        for field_name in ("source_file", "parent_id", "version_id", "content_hash", "chunk_hash", "delta_key"):
             try:
                 self.client.create_payload_index(
                     collection_name=name,
@@ -87,8 +87,14 @@ class VectorStore:
             self.supports_text_index = False
 
     @staticmethod
-    def _build_point_id(filename: str, chunk_index: int) -> str:
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"nexusai://{filename}/{chunk_index}"))
+    def _build_point_id(filename: str, chunk_index: int = 0, stable_key: Optional[str] = None) -> str:
+        identifier = stable_key if stable_key is not None else chunk_index
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"nexusai://{filename}/{identifier}"))
+
+    @classmethod
+    def _point_id_for_payload(cls, filename: str, payload: Dict[str, Any]) -> str:
+        stable_key = payload.get("delta_key") or payload.get("chunk_hash")
+        return cls._build_point_id(filename, int(payload.get("chunk_index", 0) or 0), stable_key=stable_key)
 
     @staticmethod
     def _payload_key(payload: Dict[str, Any], fallback: Any = None) -> str:
@@ -159,7 +165,7 @@ class VectorStore:
 
             points.append(
                 models.PointStruct(
-                    id=self._build_point_id(filename, i),
+                    id=self._point_id_for_payload(filename, payload),
                     vector=vector,
                     payload=payload,
                 )
@@ -182,6 +188,43 @@ class VectorStore:
     def replace_file_chunks(self, filename: str, chunks: List[Any], embeddings: List[List[float]]):
         self.delete_by_file(filename)
         self.upsert_chunks(filename, chunks, embeddings)
+
+    def upsert_chunk_points(self, filename: str, chunks: List[Any], embeddings: List[List[float]]):
+        self.upsert_chunks(filename, chunks, embeddings)
+
+    def delete_chunk_keys(self, filename: str, chunk_keys: List[str]):
+        chunk_keys = [str(chunk_key) for chunk_key in chunk_keys if chunk_key]
+        if not chunk_keys:
+            return
+        if not getattr(self, "available", True):
+            self._memory_points = [
+                point
+                for point in getattr(self, "_memory_points", [])
+                if not (
+                    point["payload"].get("source_file") == filename
+                    and str(point["payload"].get("delta_key") or point["payload"].get("chunk_hash")) in chunk_keys
+                )
+            ]
+            return
+        point_ids = [self._build_point_id(filename, stable_key=chunk_key) for chunk_key in chunk_keys]
+        self.client.delete(
+            collection_name=config.collection_name,
+            points_selector=models.PointIdsList(points=point_ids),
+            wait=True,
+        )
+
+    def sync_file_chunks(
+        self,
+        filename: str,
+        chunks: List[Any],
+        embeddings: List[List[float]],
+        *,
+        deleted_chunk_keys: Optional[List[str]] = None,
+    ):
+        if deleted_chunk_keys:
+            self.delete_chunk_keys(filename, deleted_chunk_keys)
+        if chunks:
+            self.upsert_chunk_points(filename, chunks, embeddings)
 
     def search(self, query_vector: List[float], limit: int = 5, expand_to_parent: bool = False) -> List[Dict[str, Any]]:
         if not getattr(self, "available", True):
@@ -244,6 +287,7 @@ class VectorStore:
                 "heading_level",
                 "section_type",
                 "chunk_hash",
+                "delta_key",
             ],
             with_vectors=include_vectors,
         )

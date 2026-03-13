@@ -7,6 +7,17 @@ from typing import Any, Dict, List, Optional
 from ..config import config
 
 logger = logging.getLogger("nexusai.tracer")
+STANDARD_METADATA_KEYS = (
+    "input_size",
+    "output_size",
+    "input_tokens",
+    "output_tokens",
+    "candidate_count",
+    "retrieved",
+    "confidence_score",
+    "retrieval_scores",
+    "query",
+)
 
 try:
     from langfuse import Langfuse
@@ -37,10 +48,17 @@ class Tracer:
             except Exception:
                 self.trace_handle = None
 
+    @staticmethod
+    def _normalize_metadata(metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        normalized = {key: None for key in STANDARD_METADATA_KEYS}
+        normalized.update(metadata or {})
+        return normalized
+
     @contextmanager
     def span(self, name: str, metadata: Optional[Dict[str, Any]] = None, **kwargs):
         metadata = dict(metadata or {})
         metadata.update(kwargs)
+        metadata = self._normalize_metadata(metadata)
         start = time.perf_counter()
         span: Dict[str, Any] = {
             "name": name,
@@ -86,17 +104,31 @@ class NoopTracer:
         self.metadata = metadata or {}
         self.spans: List[Dict[str, Any]] = []
 
+    @staticmethod
+    def _normalize_metadata(metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        normalized = {key: None for key in STANDARD_METADATA_KEYS}
+        normalized.update(metadata or {})
+        return normalized
+
     @contextmanager
     def span(self, name: str, metadata: Optional[Dict[str, Any]] = None, **kwargs):
         meta = dict(metadata or {})
         meta.update(kwargs)
-        yield {"name": name, "metadata": meta}
+        meta = self._normalize_metadata(meta)
+        start = time.perf_counter()
+        span = {"name": name, "metadata": meta, "start_time": time.time()}
+        try:
+            yield span
+        finally:
+            span["latency_ms"] = round((time.perf_counter() - start) * 1000.0, 3)
+            span["end_time"] = time.time()
+            self.spans.append(span)
 
     start_span = span
     step = span
 
     def export(self) -> Dict[str, Any]:
-        return {"trace_id": self.trace_id, "metadata": self.metadata, "spans": []}
+        return {"trace_id": self.trace_id, "metadata": self.metadata, "spans": self.spans}
 
     def flush(self) -> None:
         return None
