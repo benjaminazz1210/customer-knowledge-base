@@ -4,6 +4,7 @@ import os
 from typing import Any, Dict, List, Optional
 from ..config import config
 
+
 class EmbeddingService:
     _instance = None
 
@@ -16,39 +17,18 @@ class EmbeddingService:
     def _init_once(self):
         cfg_backend = os.getenv("NEXUSAI_EMBEDDING_BACKEND") or config.EMBEDDING_BACKEND
         self.backend = (cfg_backend or "local").strip().lower()
+        self.device = None
+        self.dtype = None
+        self.model = None
+        self._local_model_name = ""
         if self.backend == "mock":
             self.device = "mock"
-            self.dtype = None
-            self.model = None
             print("🧪 EmbeddingService running in MOCK mode")
             return
         if self.backend in ("dashscope", "aliyun"):
             self.device = "cloud"
-            self.dtype = None
-            self.model = None
             self._init_dashscope()
             return
-
-        import torch
-        from .scripts.qwen3_vl_embedding import Qwen3VLEmbedder
-
-        # Determine optimal device
-        if torch.backends.mps.is_available():
-            self.device = "mps"
-            self.dtype = torch.float16
-        elif torch.cuda.is_available():
-            self.device = "cuda"
-            self.dtype = torch.float32 # Default to float32 for CUDA unless specified otherwise
-        else:
-            self.device = "cpu"
-            self.dtype = torch.float32
-        
-        print(f"🚀 Initializing Qwen3-VL-Embedding-2B on {self.device}...")
-        self.model = Qwen3VLEmbedder(
-            model_name_or_path=config.EMBEDDING_MODEL,
-            dtype=self.dtype,
-            device_map=self.device
-        )
 
     def _init_dashscope(self):
         try:
@@ -70,6 +50,38 @@ class EmbeddingService:
             or config.EMBEDDING_MODEL
         )
         print(f"☁️ EmbeddingService using DashScope model: {self._dashscope_model}")
+
+    def _configure_local_backend(self):
+        if self.device is not None:
+            return
+
+        import torch
+
+        if torch.backends.mps.is_available():
+            self.device = "mps"
+            self.dtype = torch.float16
+        elif torch.cuda.is_available():
+            self.device = "cuda"
+            self.dtype = torch.float32
+        else:
+            self.device = "cpu"
+            self.dtype = torch.float32
+
+    def _ensure_local_model(self):
+        model_name = config.EMBEDDING_MODEL
+        if self.model is not None and self._local_model_name == model_name:
+            return
+
+        from .scripts.qwen3_vl_embedding import Qwen3VLEmbedder
+
+        self._configure_local_backend()
+        print(f"🚀 Initializing Qwen3-VL-Embedding-2B on {self.device}...")
+        self.model = Qwen3VLEmbedder(
+            model_name_or_path=model_name,
+            dtype=self.dtype,
+            device_map=self.device,
+        )
+        self._local_model_name = model_name
 
     @staticmethod
     def _extract_item_embedding(item: Any) -> Optional[List[float]]:
@@ -179,25 +191,14 @@ class EmbeddingService:
             dashscope_inputs = [{"text": text} for text in texts]
             return self._dashscope_embed(dashscope_inputs)
 
-        # Qwen3-VL-Embedding expects a list of dictionaries with "text" or "image" keys
+        self._ensure_local_model()
         inputs = [{"text": text} for text in texts]
-        
-        # Process the inputs to get embeddings
-        # The model returns a numpy array
         embeddings = self.model.process(inputs)
-        
-        # MRL Support: if we want to truncate to 1024 (optional, but follows our config)
-        # Assuming the base dimension is larger (e.g., 1024 or 4096)
-        # For now, we return as is or slice if dimension in config is smaller than model default
         if embeddings.shape[1] > config.VECTOR_DIMENSION:
             embeddings = embeddings[:, :config.VECTOR_DIMENSION]
-            
         return embeddings.tolist()
 
     def get_multimodal_embeddings(self, items: List[dict]) -> List[List[float]]:
-        """
-        Supports items like {'text': '...'} or {'image': 'url/path'}
-        """
         if self.backend == "mock":
             vectors = []
             for item in items:
@@ -210,6 +211,7 @@ class EmbeddingService:
         if self.backend in ("dashscope", "aliyun"):
             return self._dashscope_embed(items)
 
+        self._ensure_local_model()
         embeddings = self.model.process(items)
         if embeddings.shape[1] > config.VECTOR_DIMENSION:
             embeddings = embeddings[:, :config.VECTOR_DIMENSION]

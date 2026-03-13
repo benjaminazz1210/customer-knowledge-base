@@ -13,12 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements-online.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY backend/requirements-online.txt /tmp/requirements-online.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-online.txt
 
 COPY backend /app
 
-RUN mkdir -p /app/generated/files /app/generated/jobs
+RUN mkdir -p /app/generated/files /app/generated/jobs /app/app/evaluation/results
 
 EXPOSE 8001
 

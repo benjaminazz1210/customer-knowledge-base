@@ -1,42 +1,35 @@
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Config(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore",          # ignore unknown keys in .env
+        extra="ignore",
     )
 
-    # DeepSeek
+    # LLM providers
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
-
-    # OpenAI
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
-
-    # LlamaParse
     llama_cloud_api_key: str = ""
-
-    # Ollama
     ollama_base_url: str = "http://localhost:11434/v1"
-
-    # LLM Provider: 'openai' or 'heiyucode' or 'deepseek' or 'ollama'
     llm_provider: str = "ollama"
     llm_model: str = "qwen2.5:14b"
 
-    # Qdrant
+    # Vector stores and state
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     collection_name: str = "nexusai_knowledge_base"
-
-    # Redis (chat history)
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_db: int = 0
 
-    # Embedding
-    embedding_backend: str = "local"  # local|dashscope|aliyun
+    # Embeddings
+    embedding_backend: str = "local"  # local | dashscope | aliyun | mock
     embedding_model: str = "Qwen/Qwen3-VL-Embedding-2B"
     dashscope_api_key: str = ""
     dashscope_embedding_model: str = "qwen3-vl-embedding"
@@ -45,14 +38,76 @@ class Config(BaseSettings):
     # Chunking
     chunk_size: int = 1000
     chunk_overlap: int = 200
+    chunking_strategy: str = "fixed"  # fixed | semantic | parent_child
+    semantic_chunk_min_size: int = 200
+    semantic_chunk_max_size: int = 2000
+    parent_chunk_size: int = 2000
+    child_chunk_size: int = 400
 
-    # Phase 2: Structured parsing + vision
-    document_parser_backend: str = "auto"  # auto|builtin|unstructured|llamaparse
+    # Parsing / vision
+    document_parser_backend: str = "auto"  # auto | builtin | unstructured | llamaparse
     vision_enabled: bool = True
     vision_model: str = "gpt-4o-mini"
     vision_max_images: int = 20
 
-    # Workflow (Phase 3/4)
+    # Retrieval quality
+    reranker_enabled: bool = False
+    reranker_backend: str = "local"  # local | api | mock
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_api_key: Optional[str] = None
+    reranker_api_url: Optional[str] = None
+    reranker_top_n: int = 20
+    reranker_top_k: int = 5
+
+    query_transform_enabled: bool = False
+    query_transform_strategy: str = "rewrite"  # rewrite | decompose | hyde | multi_query | none
+    query_transform_model: Optional[str] = None
+    multi_query_count: int = 3
+
+    eval_faithfulness_threshold: float = 0.7
+    eval_relevancy_threshold: float = 0.7
+    eval_context_precision_threshold: float = 0.6
+    eval_context_recall_threshold: float = 0.6
+
+    # Production hardening
+    observability_enabled: bool = False
+    langfuse_public_key: Optional[str] = None
+    langfuse_secret_key: Optional[str] = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+
+    guardrails_enabled: bool = False
+    guardrails_backend: str = "rule_based"  # rule_based | llm
+    guardrails_block_message: str = (
+        "I'm unable to respond to that request. Please rephrase your question about our products and services."
+    )
+    guardrails_check_pii: bool = True
+    guardrails_check_injection: bool = True
+    guardrails_check_toxicity: bool = True
+
+    low_confidence_enabled: bool = False
+    low_confidence_strategy: str = "score_threshold"  # score_threshold | llm_judge
+    low_confidence_threshold: float = 0.35
+    low_confidence_message: str = (
+        "I don't have enough information in the knowledge base to answer that question accurately."
+    )
+
+    # Advanced capabilities
+    self_rag_enabled: bool = False
+    self_rag_max_retries: int = 2
+    self_rag_critique_model: Optional[str] = None
+
+    graph_rag_enabled: bool = False
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: Optional[str] = None
+    graph_entity_extraction_model: Optional[str] = None
+    graph_max_hops: int = 2
+
+    experiments_config_path: str = "backend/app/experiments.yml"
+    admin_api_key: str = ""
+    feedback_ttl_days: int = 90
+
+    # Workflow
     workflow_output_dir: str = "generated"
     workflow_template_dir: str = "assets/templates"
     workflow_hybrid_alpha: float = 0.7
@@ -62,64 +117,12 @@ class Config(BaseSettings):
     port: int = 8001
     debug: bool = True
 
-    # --- Backward-compatible uppercase aliases ---
-    @property
-    def DEEPSEEK_API_KEY(self): return self.deepseek_api_key
-    @property
-    def DEEPSEEK_BASE_URL(self): return self.deepseek_base_url
-    @property
-    def OPENAI_API_KEY(self): return self.openai_api_key
-    @property
-    def OPENAI_BASE_URL(self): return self.openai_base_url
-    @property
-    def LLAMA_CLOUD_API_KEY(self): return self.llama_cloud_api_key
-    @property
-    def OLLAMA_BASE_URL(self): return self.ollama_base_url
-    @property
-    def LLM_PROVIDER(self): return self.llm_provider
-    @property
-    def LLM_MODEL(self): return self.llm_model
-    @property
-    def QDRANT_HOST(self): return self.qdrant_host
-    @property
-    def QDRANT_PORT(self): return self.qdrant_port
-    @property
-    def COLLECTION_NAME(self): return self.collection_name
-    @property
-    def REDIS_HOST(self): return self.redis_host
-    @property
-    def REDIS_PORT(self): return self.redis_port
-    @property
-    def REDIS_DB(self): return self.redis_db
-    @property
-    def EMBEDDING_BACKEND(self): return self.embedding_backend
-    @property
-    def EMBEDDING_MODEL(self): return self.embedding_model
-    @property
-    def DASHSCOPE_API_KEY(self): return self.dashscope_api_key
-    @property
-    def DASHSCOPE_EMBEDDING_MODEL(self): return self.dashscope_embedding_model
-    @property
-    def VECTOR_DIMENSION(self): return self.vector_dimension
-    @property
-    def CHUNK_SIZE(self): return self.chunk_size
-    @property
-    def CHUNK_OVERLAP(self): return self.chunk_overlap
-    @property
-    def DOCUMENT_PARSER_BACKEND(self): return self.document_parser_backend
-    @property
-    def VISION_ENABLED(self): return self.vision_enabled
-    @property
-    def VISION_MODEL(self): return self.vision_model
-    @property
-    def VISION_MAX_IMAGES(self): return self.vision_max_images
-    @property
-    def WORKFLOW_OUTPUT_DIR(self): return self.workflow_output_dir
-    @property
-    def WORKFLOW_TEMPLATE_DIR(self): return self.workflow_template_dir
-    @property
-    def WORKFLOW_HYBRID_ALPHA(self): return self.workflow_hybrid_alpha
-    @property
-    def WORKFLOW_MAX_CONTEXT_CHUNKS(self): return self.workflow_max_context_chunks
+    def __getattr__(self, name: str):
+        if name.isupper():
+            lowered = name.lower()
+            if lowered in self.__class__.model_fields:
+                return getattr(self, lowered)
+        raise AttributeError(name)
+
 
 config = Config()

@@ -1,86 +1,68 @@
 import logging
 import os
-from urllib.parse import urlparse
-from ..config import config
-from .embedding_service import EmbeddingService
-from .vector_store import VectorStore
+import re
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Optional
+
 from openai import OpenAI
-from typing import List, Dict, Any
+
+from ..config import config
+from ..observability.tracer import create_tracer
+from .confidence_service import LowConfidenceService
+from .embedding_service import EmbeddingService
+from .graph_store import GraphStore
+from .llm_utils import create_llm_client, is_mock_backend
+from .query_transformer import QueryTransformer
+from .reranker_service import RerankerService
+from .self_rag import SelfRAGController
+from .vector_store import VectorStore
 
 logger = logging.getLogger("nexusai.rag")
+
 
 class _MockDelta:
     def __init__(self, content: str):
         self.content = content
 
+
 class _MockChoice:
     def __init__(self, content: str):
         self.delta = _MockDelta(content)
+
 
 class _MockChunk:
     def __init__(self, content: str):
         self.choices = [_MockChoice(content)]
 
+
+@dataclass
+class RAGResponse:
+    response_gen: Iterable[Any]
+    sources: List[Dict[str, Any]]
+    trace_id: str
+    confidence_score: float
+    experiment_id: Optional[str] = None
+    variant_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
 class RAGService:
-    @staticmethod
-    def _normalize_compatible_base_url(base_url: str, provider: str) -> str:
-        normalized = (base_url or "").strip().rstrip("/")
-        if not normalized:
-            return normalized
-
-        parsed = urlparse(normalized)
-        if parsed.path in ("", "/"):
-            fixed = f"{normalized}/v1"
-            logger.warning(
-                "⚠️  %s base_url missing '/v1', auto-normalized to %s",
-                provider,
-                fixed,
-            )
-            return fixed
-        return normalized
-
     def __init__(self):
         self.embedding_service = EmbeddingService()
         self.vector_store = VectorStore()
-        self.mock_llm = os.getenv("NEXUSAI_LLM_BACKEND", "").strip().lower() == "mock"
-        self.provider = config.LLM_PROVIDER.strip().lower()
+        self.reranker = RerankerService()
+        self.query_transformer = QueryTransformer()
+        self.confidence_service = LowConfidenceService()
+        self.graph_store = GraphStore()
+        self.self_rag = SelfRAGController(self)
+        self.mock_llm = is_mock_backend()
+        self.provider = config.llm_provider.strip().lower()
+        self.llm_client: Optional[OpenAI] = None if self.mock_llm else create_llm_client()
 
         if self.mock_llm:
-            self.llm_client = None
             logger.info("🧪 LLM backend: MOCK mode")
-            return
-
-        if self.provider == "ollama":
-            base_url = self._normalize_compatible_base_url(config.OLLAMA_BASE_URL, "ollama")
-            self.llm_client = OpenAI(
-                api_key="ollama",  # Ollama doesn't need a real key
-                base_url=base_url,
-            )
-            logger.info(f"🦙 LLM provider: Ollama ({base_url}) — model: {config.LLM_MODEL}")
-        elif self.provider == "deepseek":
-            if not config.DEEPSEEK_API_KEY:
-                raise ValueError("Missing DEEPSEEK_API_KEY for deepseek provider")
-            base_url = self._normalize_compatible_base_url(config.DEEPSEEK_BASE_URL, "deepseek")
-            self.llm_client = OpenAI(
-                api_key=config.DEEPSEEK_API_KEY,
-                base_url=base_url,
-            )
-            logger.info(f"🤖 LLM provider: DeepSeek ({base_url}) — model: {config.LLM_MODEL}")
-        elif self.provider in ("openai", "heiyucode"):
-            if not config.OPENAI_API_KEY:
-                raise ValueError("Missing OPENAI_API_KEY for openai/heiyucode provider")
-            base_url = self._normalize_compatible_base_url(config.OPENAI_BASE_URL, self.provider)
-            self.llm_client = OpenAI(
-                api_key=config.OPENAI_API_KEY,
-                base_url=base_url,
-            )
-            provider_name = "HeiyuCode" if self.provider == "heiyucode" else "OpenAI"
-            logger.info(f"🤖 LLM provider: {provider_name} ({base_url}) — model: {config.LLM_MODEL}")
         else:
-            raise ValueError(
-                f"Unsupported LLM_PROVIDER={config.LLM_PROVIDER!r}. "
-                "Use one of: openai, heiyucode, deepseek, ollama"
-            )
+            logger.info("🤖 LLM provider: %s — model: %s", self.provider, config.llm_model)
 
     @staticmethod
     def _progress_bar() -> str:
@@ -88,81 +70,399 @@ class RAGService:
 
     @staticmethod
     def _mock_stream(answer: str):
-        # Keep token-like chunks so SSE contract remains unchanged for tests/UI.
         for token in answer.split(" "):
-            if not token:
-                continue
-            yield _MockChunk(token + " ")
+            if token:
+                yield _MockChunk(token + " ")
 
-    def generate_response(self, query: str, history: List[Dict[str, Any]] = None):
-        if history is None:
-            history = []
-        
-        # Step 1: Embed query
-        logger.info(f"[1/4] 🔍 向量化查询中...")
-        query_vector = self.embedding_service.get_embeddings([query])[0]
-        logger.info(f"      {self._progress_bar()}  查询向量化完成")
+    @staticmethod
+    def _extract_token_from_chunk(chunk: Any) -> str:
+        choices = getattr(chunk, "choices", None)
+        if not choices and isinstance(chunk, dict):
+            choices = chunk.get("choices")
+        if not choices:
+            return ""
+        choice = choices[0]
+        delta = getattr(choice, "delta", None) if not isinstance(choice, dict) else choice.get("delta")
+        if delta is not None:
+            content = getattr(delta, "content", None) if not isinstance(delta, dict) else delta.get("content")
+            if isinstance(content, str):
+                return content
+        message = getattr(choice, "message", None) if not isinstance(choice, dict) else choice.get("message")
+        if message is not None:
+            content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
+            if isinstance(content, str):
+                return content
+        text = getattr(choice, "text", None) if not isinstance(choice, dict) else choice.get("text")
+        return text if isinstance(text, str) else ""
 
-        # Step 2: Search relevant chunks
-        logger.info(f"[2/4] 📚 检索相关文档...")
-        hits = self.vector_store.hybrid_search(
-            query_text=query,
-            query_vector=query_vector,
-            limit=5,
-            alpha=0.7,
+    @staticmethod
+    def _coerce_history(history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        return history or []
+
+    @staticmethod
+    def _simple_direct_answer(query: str) -> Optional[str]:
+        stripped = (query or "").strip()
+        if re.fullmatch(r"\d+\s*[\+\-\*\/]\s*\d+", stripped):
+            try:
+                return str(eval(stripped, {"__builtins__": {}}, {}))
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _setting(overrides: Optional[Dict[str, Any]], key: str, default: Any) -> Any:
+        if overrides and key in overrides:
+            return overrides[key]
+        return default
+
+    @staticmethod
+    def _completion_text(response: Any) -> str:
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return ""
+        message = getattr(choices[0], "message", None)
+        if message is None:
+            return ""
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("text", "")))
+                else:
+                    parts.append(str(getattr(item, "text", "")))
+            return "".join(parts).strip()
+        return str(content or "").strip()
+
+    def _transform_query(self, query: str, overrides: Optional[Dict[str, Any]] = None):
+        transform_enabled = bool(self._setting(overrides, "query_transform_enabled", config.query_transform_enabled))
+        transform_strategy = str(
+            self._setting(overrides, "query_transform_strategy", config.query_transform_strategy)
+        ).strip().lower()
+        transform_model = self._setting(overrides, "query_transform_model", config.query_transform_model)
+        multi_query_count = int(self._setting(overrides, "multi_query_count", config.multi_query_count))
+        if overrides and "query_transform_enabled" not in overrides and transform_strategy not in ("", "none"):
+            transform_enabled = True
+        transformer = QueryTransformer(
+            enabled=transform_enabled,
+            strategy=transform_strategy,
+            model=transform_model,
+            multi_query_count=multi_query_count,
         )
-        logger.info(f"      {self._progress_bar()}  检索到 {len(hits)} 条相关片段")
+        return transformer.transform(query)
 
-        # Step 3: Build context and track sources
-        logger.info(f"[3/4] 📝 构建提示词...")
-        context_parts = []
+    def _retrieve_candidates(
+        self,
+        query: str,
+        transformed_query,
+        tracer: Any,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        reranker_enabled = bool(self._setting(overrides, "reranker_enabled", config.reranker_enabled))
+        search_limit = (
+            int(self._setting(overrides, "reranker_top_n", config.reranker_top_n))
+            if reranker_enabled
+            else (config.reranker_top_n if config.reranker_enabled else max(int(config.reranker_top_k), 5))
+        )
+        alpha = float(self._setting(overrides, "workflow_hybrid_alpha", config.workflow_hybrid_alpha))
+        expand_to_parent = self._setting(overrides, "chunking_strategy", config.chunking_strategy) == "parent_child"
+
+        rankings: List[List[Dict[str, Any]]] = []
+        search_queries = transformed_query.search_queries or [query]
+        for search_query in search_queries:
+            embedding_query = transformed_query.embedding_query if transformed_query.strategy == "hyde" else search_query
+            with tracer.step("embedding", input_size=len(embedding_query)):
+                query_vector = self.embedding_service.get_embeddings([embedding_query])[0]
+
+            with tracer.step("retrieve", query=search_query, top_n=search_limit):
+                hits = self.vector_store.hybrid_search(
+                    query_text=search_query,
+                    query_vector=query_vector,
+                    limit=search_limit,
+                    alpha=alpha,
+                    expand_to_parent=expand_to_parent,
+                )
+            rankings.append(hits)
+
+        if transformed_query.strategy in ("decompose", "multi_query") and len(rankings) > 1:
+            merged = QueryTransformer.reciprocal_rank_fusion(rankings)
+        else:
+            merged = rankings[0] if rankings else []
+
+        graph_context = self.graph_store.query_context(query)
+        for graph_hit in graph_context:
+            if isinstance(graph_hit, dict):
+                merged.append(graph_hit)
+
+        merged.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
+        return merged[:search_limit]
+
+    def _rerank_candidates(
+        self,
+        query: str,
+        hits: List[Dict[str, Any]],
+        tracer: Any,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        reranker_enabled = bool(self._setting(overrides, "reranker_enabled", config.reranker_enabled))
+        top_n = int(self._setting(overrides, "reranker_top_n", config.reranker_top_n))
+        top_k = int(self._setting(overrides, "reranker_top_k", config.reranker_top_k))
+        backend = str(self._setting(overrides, "reranker_backend", config.reranker_backend)).strip().lower()
+        model_name = str(self._setting(overrides, "reranker_model", config.reranker_model))
+        api_url = self._setting(overrides, "reranker_api_url", config.reranker_api_url)
+        api_key = self._setting(overrides, "reranker_api_key", config.reranker_api_key)
+        if not reranker_enabled:
+            return hits[:top_k]
+        with tracer.step("rerank", candidate_count=len(hits)):
+            reranked = self.reranker.rerank_hits(
+                query,
+                hits[:top_n],
+                enabled=reranker_enabled,
+                backend=backend,
+                top_k=top_k,
+                model_name=model_name,
+                api_url=api_url,
+                api_key=api_key,
+            )
+        return reranked[:top_k]
+
+    @staticmethod
+    def _source_details_from_hits(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         source_details = []
-        
         for hit in hits:
-            payload = hit["payload"]
-            score = hit["score"]
-            context_parts.append(payload["chunk_text"])
-            source_details.append({
-                "source_file": payload["source_file"],
-                "content": payload["chunk_text"],
-                "score": float(score)
-            })
+            payload = hit.get("payload", {}) or {}
+            source_details.append(
+                {
+                    "source_file": payload.get("source_file"),
+                    "content": payload.get("chunk_text", ""),
+                    "score": float(hit.get("score", 0.0)),
+                    "parent_id": payload.get("parent_id"),
+                    "children_ids": payload.get("children_ids", []),
+                }
+            )
+        return source_details
 
-        context_text = "\n\n---\n\n".join(context_parts)
+    @staticmethod
+    def _build_context(hits: List[Dict[str, Any]]) -> str:
+        return "\n\n---\n\n".join(str(hit.get("payload", {}).get("chunk_text", "")) for hit in hits if hit.get("payload"))
+
+    def _build_messages(self, query: str, history: List[Dict[str, Any]], context_text: str) -> List[Dict[str, str]]:
         system_prompt = (
             "你是一个知识库智能助手。请根据下方检索到的文档内容回答用户的问题。"
             "如果文档中没有相关信息，请如实说明，不要编造答案。回答请简洁准确。\n\n"
             f"参考文档：\n{context_text}"
         )
-        
-        log_sources = list(set([s["source_file"] for s in source_details]))
-        logger.info(f"      {self._progress_bar()}  来源文件: {log_sources}")
-
-        if self.mock_llm:
-            if source_details:
-                source_files = ", ".join(sorted(set(s["source_file"] for s in source_details)))
-                answer = f"Mock answer based on sources {source_files}. Query: {query}"
-            else:
-                answer = f"Mock answer: no relevant context found. Query: {query}"
-            logger.info("      [MOCK] LLM stream generated")
-            return self._mock_stream(answer), source_details
-
-        # Step 4: Call LLM (streaming)
-        messages = [{"role": "system", "content": system_prompt}]
-        
-        # Embed chat history
+        messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
         for msg in history:
             role = "assistant" if msg.get("isAi") else "user"
             messages.append({"role": role, "content": msg.get("text", "")})
-            
         messages.append({"role": "user", "content": query})
+        return messages
 
-        logger.info(f"[4/4] 🤖 调用 LLM 生成回答 (model={config.LLM_MODEL})...")
-        response = self.llm_client.chat.completions.create(
-            model=config.LLM_MODEL,
-            messages=messages,
-            stream=True
+    def _build_response(
+        self,
+        *,
+        tracer: Any,
+        response_gen: Iterable[Any],
+        sources: List[Dict[str, Any]],
+        confidence_score: float,
+        experiment_id: Optional[str],
+        variant_id: Optional[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> RAGResponse:
+        tracer.flush()
+        payload = dict(metadata or {})
+        payload.setdefault("trace", tracer.export())
+        return RAGResponse(
+            response_gen=response_gen,
+            sources=sources,
+            trace_id=tracer.trace_id,
+            confidence_score=confidence_score,
+            experiment_id=experiment_id,
+            variant_id=variant_id,
+            metadata=payload,
         )
-        logger.info(f"      {self._progress_bar()}  LLM 开始流式输出...")
 
-        return response, source_details
+    def _direct_answer_stream(self, query: str, history: List[Dict[str, Any]], tracer: Any):
+        direct_answer = self._simple_direct_answer(query)
+        if direct_answer or self.mock_llm:
+            return self._mock_stream(direct_answer or f"Direct response: {query}")
+
+        with tracer.step("generate", prompt_size=0, history_size=len(history)):
+            messages = [{"role": "system", "content": "直接回答用户问题；无需进行知识库检索。"}]
+            for msg in history:
+                role = "assistant" if msg.get("isAi") else "user"
+                messages.append({"role": role, "content": msg.get("text", "")})
+            messages.append({"role": "user", "content": query})
+            return self.llm_client.chat.completions.create(
+                model=config.llm_model,
+                messages=messages,
+                stream=True,
+            )
+
+    def generate_response(
+        self,
+        query: str,
+        history: Optional[List[Dict[str, Any]]] = None,
+        *,
+        session_id: str = "default",
+        overrides: Optional[Dict[str, Any]] = None,
+        experiment_id: Optional[str] = None,
+        variant_id: Optional[str] = None,
+    ) -> RAGResponse:
+        history = self._coerce_history(history)
+        tracer = create_tracer(
+            enabled=config.observability_enabled,
+            metadata={
+                "query": query,
+                "session_id": session_id,
+                "experiment_id": experiment_id,
+                "variant_id": variant_id,
+            },
+        )
+
+        if config.self_rag_enabled:
+            with tracer.step("self_rag_decision", input_size=len(query)):
+                should_skip = self.self_rag.should_skip_retrieval(query)
+            if should_skip:
+                return self._build_response(
+                    tracer=tracer,
+                    response_gen=self._direct_answer_stream(query, history, tracer),
+                    sources=[],
+                    confidence_score=1.0,
+                    experiment_id=experiment_id,
+                    variant_id=variant_id,
+                    metadata={"self_rag_skipped_retrieval": True},
+                )
+
+        with tracer.step("query_transform", input_size=len(query)):
+            transformed_query = self._transform_query(query, overrides=overrides)
+
+        hits = []
+        for attempt in range(max(config.self_rag_max_retries, 0) + 1):
+            hits = self._retrieve_candidates(query, transformed_query, tracer, overrides=overrides)
+            confidence_score = self.confidence_service.score_hits(hits)
+            if not config.self_rag_enabled:
+                break
+            with tracer.step("self_rag_critique", attempt=attempt, retrieved=len(hits), confidence_score=confidence_score):
+                critique_passed = self.self_rag.critique_hits(query, hits, confidence_score)
+            if critique_passed:
+                break
+            if not self.self_rag.should_retry(hits, confidence_score, attempt):
+                break
+            retry_overrides = dict(overrides or {})
+            retry_overrides.update({"query_transform_enabled": True, "query_transform_strategy": "rewrite"})
+            transformed_query = self._transform_query(query, overrides=retry_overrides)
+
+        hits = self._rerank_candidates(query, hits, tracer, overrides=overrides)
+        confidence_assessment = self.confidence_service.evaluate(query, hits)
+        low_confidence = bool(confidence_assessment.get("is_low_confidence", False))
+        confidence_score = float(confidence_assessment.get("confidence_score", 0.0))
+
+        with tracer.step("context", retrieved=len(hits), confidence_score=confidence_score):
+            context_text = self._build_context(hits)
+            source_details = self._source_details_from_hits(hits)
+
+        if low_confidence:
+            logger.info("⚠️ Low confidence triggered for query=%r score=%.4f", query, confidence_score)
+            return self._build_response(
+                tracer=tracer,
+                response_gen=self._mock_stream(config.low_confidence_message),
+                sources=source_details,
+                confidence_score=confidence_score,
+                experiment_id=experiment_id,
+                variant_id=variant_id,
+                metadata={"low_confidence": True},
+            )
+
+        if self.mock_llm:
+            if source_details:
+                source_files = ", ".join(sorted(set(str(s["source_file"]) for s in source_details if s.get("source_file"))))
+                answer = f"Mock answer based on sources {source_files}. Query: {query}"
+            else:
+                answer = f"Mock answer: no relevant context found. Query: {query}"
+            return self._build_response(
+                tracer=tracer,
+                response_gen=self._mock_stream(answer),
+                sources=source_details,
+                confidence_score=confidence_score,
+                experiment_id=experiment_id,
+                variant_id=variant_id,
+            )
+
+        if config.self_rag_enabled:
+            with tracer.step("generate", prompt_size=len(context_text), history_size=len(history), mode="self_rag_non_stream"):
+                messages = self._build_messages(query, history, context_text)
+                response = self.llm_client.chat.completions.create(
+                    model=config.llm_model,
+                    messages=messages,
+                    stream=False,
+                )
+                answer = self._completion_text(response)
+            with tracer.step("self_rag_answer_check", answer_size=len(answer)):
+                if not self.self_rag.critique_answer(query, answer, hits):
+                    retry_response = self.llm_client.chat.completions.create(
+                        model=config.llm_model,
+                        messages=messages,
+                        stream=False,
+                    )
+                    answer = self._completion_text(retry_response)
+            return self._build_response(
+                tracer=tracer,
+                response_gen=self._mock_stream(answer),
+                sources=source_details,
+                confidence_score=confidence_score,
+                experiment_id=experiment_id,
+                variant_id=variant_id,
+                metadata={"self_rag_answer_checked": True},
+            )
+
+        with tracer.step("generate", prompt_size=len(context_text), history_size=len(history)):
+            messages = self._build_messages(query, history, context_text)
+            response = self.llm_client.chat.completions.create(
+                model=config.llm_model,
+                messages=messages,
+                stream=True,
+            )
+
+        return self._build_response(
+            tracer=tracer,
+            response_gen=response,
+            sources=source_details,
+            confidence_score=confidence_score,
+            experiment_id=experiment_id,
+            variant_id=variant_id,
+        )
+
+    def generate_answer_text(
+        self,
+        query: str,
+        history: Optional[List[Dict[str, Any]]] = None,
+        *,
+        session_id: str = "default",
+        overrides: Optional[Dict[str, Any]] = None,
+        experiment_id: Optional[str] = None,
+        variant_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        result = self.generate_response(
+            query,
+            history=history,
+            session_id=session_id,
+            overrides=overrides,
+            experiment_id=experiment_id,
+            variant_id=variant_id,
+        )
+        answer_parts: List[str] = []
+        for chunk in result.response_gen:
+            token = self._extract_token_from_chunk(chunk)
+            if token:
+                answer_parts.append(token)
+        return {
+            "answer": "".join(answer_parts).strip(),
+            "sources": result.sources,
+            "trace_id": result.trace_id,
+            "confidence_score": result.confidence_score,
+            "metadata": result.metadata,
+        }
