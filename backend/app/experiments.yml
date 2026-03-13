@@ -1,0 +1,12 @@
+experiments:
+  - id: rag-upgrade-baseline
+    enabled: false
+    variants:
+      - id: control
+        weight: 0.5
+        overrides: {}
+      - id: upgraded
+        weight: 0.5
+        overrides:
+          reranker_enabled: true
+          query_transform_strategy: multi_query

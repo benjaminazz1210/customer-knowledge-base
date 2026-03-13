@@ -1,0 +1,102 @@
+[
+  {
+    "question": "What is the refund policy for enterprise subscriptions?",
+    "ground_truth": "Enterprise subscriptions support prorated refunds only when explicitly approved in the service agreement.",
+    "context_sources": ["enterprise_policy.md"]
+  },
+  {
+    "question": "How do I rotate an API key?",
+    "ground_truth": "Rotate the API key from the admin console, update downstream services, and revoke the previous key after validation.",
+    "context_sources": ["security_runbook.md"]
+  },
+  {
+    "question": "Which ports does the Qdrant service use?",
+    "ground_truth": "Qdrant uses port 6333 for HTTP and 6334 for gRPC in standard deployments.",
+    "context_sources": ["infra_reference.md"]
+  },
+  {
+    "question": "How is chat history stored?",
+    "ground_truth": "Chat history is stored in Redis and keyed by session id.",
+    "context_sources": ["architecture_overview.md"]
+  },
+  {
+    "question": "What should happen when the system has low confidence?",
+    "ground_truth": "The assistant should refuse to answer and return a low-confidence fallback message.",
+    "context_sources": ["rag_guardrails.md"]
+  },
+  {
+    "question": "How are prompt injection attempts handled?",
+    "ground_truth": "Prompt injection attempts are blocked by input guardrails before query transformation.",
+    "context_sources": ["rag_guardrails.md"]
+  },
+  {
+    "question": "What does reranking do in the retrieval pipeline?",
+    "ground_truth": "Reranking rescales retrieved chunks against the original query and improves final context precision.",
+    "context_sources": ["rag_quality.md"]
+  },
+  {
+    "question": "What is HyDE used for?",
+    "ground_truth": "HyDE generates a hypothetical answer, embeds it, and uses that embedding to improve retrieval recall.",
+    "context_sources": ["rag_quality.md"]
+  },
+  {
+    "question": "How does multi-query retrieval merge results?",
+    "ground_truth": "It deduplicates candidate chunks and merges ranked lists with reciprocal rank fusion.",
+    "context_sources": ["rag_quality.md"]
+  },
+  {
+    "question": "What is parent-child chunking?",
+    "ground_truth": "Parent-child chunking retrieves small child chunks but returns the larger parent chunk as LLM context.",
+    "context_sources": ["chunking_reference.md"]
+  },
+  {
+    "question": "Where are evaluation results stored?",
+    "ground_truth": "Evaluation results are written as timestamped JSON files under the evaluation results directory.",
+    "context_sources": ["evaluation_reference.md"]
+  },
+  {
+    "question": "Which metrics are tracked in evaluation?",
+    "ground_truth": "Faithfulness, answer relevancy, context precision, and context recall are tracked.",
+    "context_sources": ["evaluation_reference.md"]
+  },
+  {
+    "question": "What metadata is included in the SSE response?",
+    "ground_truth": "The first SSE event includes sources, trace_id, confidence_score, and message_id.",
+    "context_sources": ["api_reference.md"]
+  },
+  {
+    "question": "How are document versions identified?",
+    "ground_truth": "Each document version stores a version_id, content hash, timestamp, and chunk snapshot.",
+    "context_sources": ["document_versioning.md"]
+  },
+  {
+    "question": "What does the feedback endpoint accept?",
+    "ground_truth": "The feedback endpoint accepts message_id, rating, comment, and the associated trace_id.",
+    "context_sources": ["api_reference.md"]
+  },
+  {
+    "question": "How are traces propagated to the frontend?",
+    "ground_truth": "The backend includes trace_id in the first SSE payload so the frontend can link a turn to its trace.",
+    "context_sources": ["observability.md"]
+  },
+  {
+    "question": "When is Neo4j used?",
+    "ground_truth": "Neo4j is used only when Graph RAG is enabled, otherwise vector-only retrieval remains unaffected.",
+    "context_sources": ["graph_rag.md"]
+  },
+  {
+    "question": "How is an unchanged file upload handled?",
+    "ground_truth": "The upload is skipped when the new content hash matches the latest stored document hash.",
+    "context_sources": ["document_versioning.md"]
+  },
+  {
+    "question": "How are experiment variants assigned?",
+    "ground_truth": "Variants are assigned deterministically per session using the configured split ratios.",
+    "context_sources": ["ab_testing.md"]
+  },
+  {
+    "question": "What happens if Langfuse is disabled?",
+    "ground_truth": "A noop tracer is used and no network calls are sent to Langfuse.",
+    "context_sources": ["observability.md"]
+  }
+]
