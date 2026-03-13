@@ -279,6 +279,17 @@ class PersistenceTests(unittest.TestCase):
         self.assertIsNotNone(implicit)
         self.assertEqual(implicit["rating"], "implicit_negative")
 
+    def test_activate_version_updates_latest_hash(self):
+        with patch("app.services.document_version_service.redis.Redis", side_effect=RuntimeError("redis down")):
+            versions = DocumentVersionService()
+        v1_hash = versions.compute_hash(b"v1")
+        v2_hash = versions.compute_hash(b"v2")
+        v1 = versions.record_version("doc.txt", v1_hash, [{"chunk_text": "v1"}], raw_content="v1")
+        versions.record_version("doc.txt", v2_hash, [{"chunk_text": "v2"}], raw_content="v2")
+        activated = versions.activate_version("doc.txt", v1["version_id"], activated_by="rollback")
+        self.assertEqual(versions.latest_hash("doc.txt"), v1_hash)
+        self.assertEqual(activated["metadata"]["activated_from_version_id"], v1["version_id"])
+
     def test_low_confidence_events_are_persisted_to_file_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch(
             "app.services.confidence_service.redis.Redis",
@@ -455,10 +466,16 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(authorized.status_code, 200)
         self.assertEqual(duplicated.status_code, 404)
 
+    def test_admin_routes_fail_closed_without_configured_api_key(self):
+        client = self.build_client()
+        with patch("app.routers.admin.config.admin_api_key", None):
+            response = client.post("/api/admin/evaluate")
+        self.assertEqual(response.status_code, 503)
+
     def test_admin_rollback_uses_snapshot_embeddings_when_available(self):
         client = self.build_client()
         chunks = [{"chunk_text": "Chunk A", "metadata": {"chunk_hash": "hash-a"}}]
-        with patch.object(
+        with patch("app.routers.admin.config.admin_api_key", "secret"), patch.object(
             admin_router.version_service,
             "rollback",
             return_value={"chunks": chunks, "embeddings": [[0.1, 0.9]]},
@@ -471,12 +488,18 @@ class AdminApiTests(unittest.TestCase):
         ) as embedding_mock, patch.object(
             admin_router.graph_store,
             "replace_document",
-        ):
-            response = client.post("/api/admin/documents/rollback/demo.txt?version_id=v1")
+        ), patch.object(
+            admin_router.version_service,
+            "activate_version",
+            return_value={"version_id": "current-v1"},
+        ) as activate_mock:
+            response = client.post("/api/admin/documents/rollback/demo.txt?version_id=v1", headers={"x-admin-api-key": "secret"})
         self.assertEqual(response.status_code, 200)
         embedding_mock.assert_not_called()
         replace_mock.assert_called_once_with("demo.txt", chunks, [[0.1, 0.9]])
+        activate_mock.assert_called_once_with("demo.txt", "v1", activated_by="rollback")
         self.assertEqual(response.json()["restored_chunk_hashes"], ["hash-a"])
+        self.assertEqual(response.json()["current_version_id"], "current-v1")
 
 
 class UploadApiTests(unittest.TestCase):
@@ -541,9 +564,9 @@ class UploadApiTests(unittest.TestCase):
         embedding_mock.assert_called_once_with(["Chunk B"])
         sync_args, sync_kwargs = sync_mock.call_args
         self.assertEqual(sync_args[0], "demo.txt")
-        self.assertEqual(len(sync_args[1]), 1)
-        self.assertEqual(sync_args[1][0]["chunk_text"], "Chunk B")
-        self.assertEqual(len(sync_args[2]), 1)
+        self.assertEqual(len(sync_args[1]), 2)
+        self.assertEqual([chunk["chunk_text"] for chunk in sync_args[1]], ["Chunk A", "Chunk B"])
+        self.assertEqual(len(sync_args[2]), 2)
         self.assertEqual(sync_kwargs["deleted_chunk_keys"], [])
 
     def test_upload_chunk_reorder_does_not_trigger_reembedding(self):
@@ -595,8 +618,9 @@ class UploadApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         embedding_mock.assert_not_called()
         sync_args, sync_kwargs = sync_mock.call_args
-        self.assertEqual(sync_args[1], [])
-        self.assertEqual(sync_args[2], [])
+        self.assertEqual(len(sync_args[1]), 2)
+        self.assertEqual([chunk["chunk_text"] for chunk in sync_args[1]], ["Chunk B", "Chunk A"])
+        self.assertEqual(len(sync_args[2]), 2)
         self.assertEqual(sync_kwargs["deleted_chunk_keys"], [])
 
     def test_upload_deletes_removed_chunk_by_delta_key(self):
@@ -644,6 +668,9 @@ class UploadApiTests(unittest.TestCase):
             response = client.post("/api/upload", files={"file": ("demo.txt", b"Chunk A", "text/plain")})
         self.assertEqual(response.status_code, 200)
         embedding_mock.assert_not_called()
+        sync_args, sync_kwargs = sync_mock.call_args
+        self.assertEqual(len(sync_args[1]), 1)
+        self.assertEqual(sync_args[1][0]["chunk_text"], "Chunk A")
         sync_kwargs = sync_mock.call_args.kwargs
         self.assertEqual(sync_kwargs["deleted_chunk_keys"], [f"{chunk_b_hash}:0"])
 
@@ -752,6 +779,23 @@ class GraphAndVersioningTests(unittest.TestCase):
         texts = [item["payload"]["chunk_text"] for item in results]
         self.assertTrue(any("Acme" in text and "Beta" in text for text in texts))
         self.assertTrue(any("Beta" in text and "Gamma" in text for text in texts))
+
+    def test_graph_store_replace_document_removes_stale_edges(self):
+        with patch("app.services.graph_store.config.graph_rag_enabled", True), patch(
+            "app.services.graph_store.config.graph_entity_extraction_backend",
+            "regex",
+        ):
+            store = GraphStore()
+            store.replace_document(
+                "doc-a",
+                [{"chunk_text": "Acme Beta", "metadata": {"chunk_hash": "ha", "version_id": "v1"}}],
+            )
+            store.replace_document(
+                "doc-a",
+                [{"chunk_text": "Gamma Delta", "metadata": {"chunk_hash": "hb", "version_id": "v2"}}],
+            )
+            results = store.query_context("Acme")
+        self.assertEqual(results, [])
 
     def test_document_version_diff_detects_added_deleted_and_unchanged(self):
         old_chunks = [
