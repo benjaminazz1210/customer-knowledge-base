@@ -47,8 +47,21 @@ class Evaluator:
             return 1.0
         return round(len(expected & actual) / len(expected), 4)
 
-    def evaluate_question(self, item: Dict[str, Any], session_id: str = "evaluation") -> Dict[str, Any]:
-        result = self.rag_service.generate_answer_text(item["question"], session_id=session_id)
+    def evaluate_question(
+        self,
+        item: Dict[str, Any],
+        session_id: str = "evaluation",
+        overrides: Optional[Dict[str, Any]] = None,
+        experiment_id: Optional[str] = None,
+        variant_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        result = self.rag_service.generate_answer_text(
+            item["question"],
+            session_id=session_id,
+            overrides=overrides,
+            experiment_id=experiment_id,
+            variant_id=variant_id,
+        )
         answer = result.get("answer", "")
         sources = result.get("sources", [])
         source_files = [str(source.get("source_file")) for source in sources if source.get("source_file")]
@@ -63,6 +76,10 @@ class Evaluator:
             "expected_context_sources": item.get("context_sources", []),
             "answer": answer,
             "actual_context_sources": source_files,
+            "trace_id": result.get("trace_id"),
+            "confidence_score": result.get("confidence_score"),
+            "experiment_id": experiment_id,
+            "variant_id": variant_id,
             "metrics": {
                 "faithfulness": faithfulness,
                 "answer_relevancy": answer_relevancy,
@@ -89,14 +106,32 @@ class Evaluator:
             for key in keys
         }
 
-    def run(self, dataset: Optional[List[Dict[str, Any]]] = None, session_id: str = "evaluation") -> Dict[str, Any]:
+    def run(
+        self,
+        dataset: Optional[List[Dict[str, Any]]] = None,
+        session_id: str = "evaluation",
+        overrides: Optional[Dict[str, Any]] = None,
+        experiment_id: Optional[str] = None,
+        variant_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         dataset = dataset or self.load_dataset()
-        per_question = [self.evaluate_question(item, session_id=session_id) for item in dataset]
+        per_question = [
+            self.evaluate_question(
+                item,
+                session_id=session_id,
+                overrides=overrides,
+                experiment_id=experiment_id,
+                variant_id=variant_id,
+            )
+            for item in dataset
+        ]
         aggregate = self._aggregate(per_question)
         payload = {
             "timestamp": time.time(),
             "backend": self.backend,
             "dataset_path": str(self.dataset_path),
+            "experiment_id": experiment_id,
+            "variant_id": variant_id,
             "aggregate": aggregate,
             "thresholds": {
                 "faithfulness": config.eval_faithfulness_threshold,

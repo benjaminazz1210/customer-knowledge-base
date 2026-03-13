@@ -36,6 +36,10 @@ class DocumentVersionService:
 
     compute_hash = compute_content_hash
 
+    @staticmethod
+    def generate_version_id() -> str:
+        return str(uuid.uuid4())
+
     def _key(self, filename: str) -> str:
         return f"document:versions:{filename}"
 
@@ -73,10 +77,13 @@ class DocumentVersionService:
         chunks: List[Any],
         timestamp: Optional[Any] = None,
         raw_content: Optional[str] = None,
+        *,
+        version_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         versions = self.get_versions(filename)
         record = {
-            "version_id": str(uuid.uuid4()),
+            "version_id": version_id or self.generate_version_id(),
             "filename": filename,
             "content_hash": content_hash,
             "hash": content_hash,
@@ -84,6 +91,7 @@ class DocumentVersionService:
             "chunks": chunks,
             "chunk_ids": chunks,
             "raw_content": raw_content or "",
+            "metadata": metadata or {},
         }
         versions.append(record)
         self._set_versions(filename, versions)

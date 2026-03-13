@@ -16,11 +16,19 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     evaluator = Evaluator(dataset_path=args.dataset or None)
-    results = evaluator.run(session_id=args.session_id)
-    print(Evaluator.format_metrics_table(results))
-    print("\nresults_json=%s" % results.get("output_path"))
+    try:
+        results = evaluator.run(session_id=args.session_id)
+    except Exception as exc:
+        print(f"evaluation_error={exc}")
+        return 2
 
-    if args.fail_on_threshold and not evaluator.passes_thresholds(results):
+    passed = evaluator.passes_thresholds(results)
+    print(Evaluator.format_metrics_table(results))
+    print("\nbackend=%s" % results.get("backend"))
+    print("threshold_status=%s" % ("PASS" if passed else "FAIL"))
+    print("results_json=%s" % results.get("output_path"))
+
+    if args.fail_on_threshold and not passed:
         return 1
     return 0
 

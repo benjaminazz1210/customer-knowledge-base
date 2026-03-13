@@ -13,7 +13,7 @@ class VectorStore:
         self.supports_text_index = False
         self.available = False
         self._memory_points: List[Dict[str, Any]] = []
-        self.client = QdrantClient(host=config.qdrant_host, port=config.qdrant_port)
+        self.client = QdrantClient(host=config.qdrant_host, port=config.qdrant_port, check_compatibility=False)
         try:
             self._ensure_collection()
             self.available = True
@@ -198,26 +198,39 @@ class VectorStore:
             hits = self._dedupe_expanded_hits(hits)
         return hits
 
-    def _scroll_chunks(self, limit_per_page: int = 256, with_payload: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def _scroll_chunks(
+        self,
+        limit_per_page: int = 256,
+        with_payload: Optional[List[str]] = None,
+        with_vectors: bool = False,
+    ) -> List[Dict[str, Any]]:
         if not getattr(self, "available", True):
-            return [{"id": point["id"], "payload": point["payload"]} for point in getattr(self, "_memory_points", [])]
+            rows = [{"id": point["id"], "payload": point["payload"]} for point in getattr(self, "_memory_points", [])]
+            if with_vectors:
+                for row, point in zip(rows, getattr(self, "_memory_points", [])):
+                    row["vector"] = point.get("vector")
+            return rows
         points: List[Dict[str, Any]] = []
         offset = None
         while True:
             scroll_result = self.client.scroll(
                 collection_name=config.collection_name,
                 with_payload=with_payload or True,
+                with_vectors=with_vectors,
                 limit=limit_per_page,
                 offset=offset,
             )
             page_points, offset = scroll_result
             for point in page_points:
-                points.append({"id": point.id, "payload": point.payload})
+                row = {"id": point.id, "payload": point.payload}
+                if with_vectors:
+                    row["vector"] = point.vector
+                points.append(row)
             if offset is None:
                 break
         return points
 
-    def get_file_chunks(self, filename: str) -> List[Dict[str, Any]]:
+    def get_file_chunks(self, filename: str, include_vectors: bool = False) -> List[Dict[str, Any]]:
         rows = self._scroll_chunks(
             with_payload=[
                 "source_file",
@@ -230,7 +243,9 @@ class VectorStore:
                 "heading_path",
                 "heading_level",
                 "section_type",
-            ]
+                "chunk_hash",
+            ],
+            with_vectors=include_vectors,
         )
         results = [row for row in rows if str((row.get("payload") or {}).get("source_file", "")) == filename]
         results.sort(key=lambda item: int((item.get("payload") or {}).get("chunk_index", 0)))

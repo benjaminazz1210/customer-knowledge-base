@@ -9,6 +9,7 @@ from openai import BadRequestError
 from pydantic import BaseModel
 
 from ..config import config
+from ..services.ab_test import ABTestManager
 from ..services.feedback_service import FeedbackService
 from ..services.guardrails_service import GuardrailsService
 from ..services.history_service import HistoryService
@@ -22,6 +23,7 @@ self_rag = SelfRAGController(rag_service)
 history_service = HistoryService()
 guardrails_service = GuardrailsService()
 feedback_service = FeedbackService()
+ab_test_manager = ABTestManager()
 
 
 def _get_attr_or_key(obj: Any, key: str) -> Any:
@@ -167,11 +169,15 @@ async def chat(request: ChatRequest):
 
     try:
         history = history_service.get_history(session_id=request.session_id)
+        assignment = ab_test_manager.assign_active_variant(request.session_id) or {}
         response_gen, sources, metadata = _normalize_rag_result(
             self_rag.generate_response(
                 request.message,
                 history=history,
                 session_id=request.session_id,
+                overrides=assignment.get("overrides"),
+                experiment_id=assignment.get("experiment_id"),
+                variant_id=assignment.get("variant_id"),
             )
         )
         trace_id = metadata.get("trace_id") or str(uuid.uuid4())
@@ -222,16 +228,25 @@ async def chat(request: ChatRequest):
                 rendered_tokens.append("生成回答时出现错误，请稍后重试。")
                 yield "data: %s\n\n" % json.dumps({"token": "生成回答时出现错误，请稍后重试。"})
             finally:
-                feedback_service.save_chat_artifact(
+                feedback_service.register_turn(
                     trace_id=trace_id,
-                    payload={
-                        "query": request.message,
-                        "answer": "".join(rendered_tokens).strip(),
-                        "sources": sources,
-                        "confidence_score": confidence_score,
-                        "session_id": request.session_id,
-                    },
+                    session_id=request.session_id,
+                    query=request.message,
+                    answer="".join(rendered_tokens).strip(),
+                    sources=sources,
+                    confidence_score=confidence_score,
                 )
+                if metadata.get("experiment_id") and metadata.get("variant_id"):
+                    ab_test_manager.record_result(
+                        str(metadata.get("experiment_id")),
+                        str(metadata.get("variant_id")),
+                        {
+                            "trace_id": trace_id,
+                            "session_id": request.session_id,
+                            "confidence_score": confidence_score,
+                            "sources_count": len(sources),
+                        },
+                    )
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(stream_response(), media_type="text/event-stream")

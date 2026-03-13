@@ -1,5 +1,6 @@
 import logging
 import time
+from dataclasses import asdict
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
@@ -52,39 +53,86 @@ async def upload_file(file: UploadFile = File(...)):
         if not chunks:
             raise HTTPException(status_code=400, detail="File is empty or could not be parsed.")
 
-        version_record = version_service.record_version(
-            filename=file.filename,
-            content_hash=content_hash,
-            chunks=chunks,
-        )
-        version_id = version_record["version_id"]
+        version_id = version_service.generate_version_id()
 
         prepared_chunks = []
         for chunk in chunks:
             if isinstance(chunk, dict):
                 metadata = dict(chunk.get("metadata", {}))
-                metadata.update({"content_hash": content_hash, "version_id": version_id})
+                chunk_text = str(chunk.get("chunk_text", ""))
+                metadata.update(
+                    {
+                        "content_hash": content_hash,
+                        "version_id": version_id,
+                        "chunk_hash": version_service.compute_content_hash(chunk_text.encode("utf-8")),
+                    }
+                )
                 prepared_chunks.append({**chunk, "metadata": metadata})
             else:
+                chunk_text = str(chunk)
                 prepared_chunks.append(
                     {
-                        "chunk_text": str(chunk),
-                        "metadata": {"content_hash": content_hash, "version_id": version_id},
+                        "chunk_text": chunk_text,
+                        "metadata": {
+                            "content_hash": content_hash,
+                            "version_id": version_id,
+                            "chunk_hash": version_service.compute_content_hash(chunk_text.encode("utf-8")),
+                        },
                     }
                 )
 
-        embedding_texts = [c.get("chunk_text", "") if isinstance(c, dict) else str(c) for c in prepared_chunks]
+        existing_chunks = vector_store.get_file_chunks(file.filename, include_vectors=True)
+        existing_vectors = {}
+        for row in existing_chunks:
+            payload = row.get("payload", {}) or {}
+            chunk_hash = payload.get("chunk_hash")
+            vector = row.get("vector")
+            if chunk_hash and vector:
+                existing_vectors[str(chunk_hash)] = vector
+
+        embedding_texts = []
+        embedding_indexes = []
+        embeddings = [None] * len(prepared_chunks)
+        reused_embeddings = 0
+        for idx, chunk in enumerate(prepared_chunks):
+            metadata = chunk.get("metadata", {}) if isinstance(chunk, dict) else {}
+            chunk_hash = str(metadata.get("chunk_hash", ""))
+            reused_vector = existing_vectors.get(chunk_hash)
+            if reused_vector is not None:
+                embeddings[idx] = reused_vector
+                reused_embeddings += 1
+                continue
+            embedding_texts.append(chunk.get("chunk_text", "") if isinstance(chunk, dict) else str(chunk))
+            embedding_indexes.append(idx)
 
         logger.info(
-            "   Parsed via %s: %s sections, %s images, %s chunks, generating embeddings...",
+            "   Parsed via %s: %s sections, %s images, %s chunks, generating embeddings (%s reused)...",
             parsed_doc.backend_used,
             len(parsed_doc.sections),
             len(parsed_doc.images),
             len(prepared_chunks),
+            reused_embeddings,
         )
-        embeddings = embedding_service.get_embeddings(embedding_texts)
+        if embedding_texts:
+            fresh_embeddings = embedding_service.get_embeddings(embedding_texts)
+            for idx, vector in zip(embedding_indexes, fresh_embeddings):
+                embeddings[idx] = vector
+        if any(vector is None for vector in embeddings):
+            raise RuntimeError("embedding generation did not return a vector for every chunk")
+        embeddings = list(embeddings)
         vector_store.replace_file_chunks(file.filename, prepared_chunks, embeddings)
         graph_store.ingest_document(file.filename, prepared_chunks)
+        version_record = version_service.record_version(
+            filename=file.filename,
+            content_hash=content_hash,
+            chunks=prepared_chunks,
+            raw_content=parsed_doc.full_text,
+            version_id=version_id,
+            metadata={
+                "parser_backend": parsed_doc.backend_used,
+                "sections": [asdict(section) for section in parsed_doc.sections],
+            },
+        )
         logger.info("✅ Upload complete: %s (%s chunks stored)", file.filename, len(prepared_chunks))
 
         return {
@@ -96,8 +144,9 @@ async def upload_file(file: UploadFile = File(...)):
             "sections_count": len(parsed_doc.sections),
             "images_count": len(parsed_doc.images),
             "parser_backend": parsed_doc.backend_used,
-            "version_id": version_id,
+            "version_id": version_record["version_id"],
             "content_hash": content_hash,
+            "reused_embeddings": reused_embeddings,
             "timestamp": time.time(),
         }
     except HTTPException:

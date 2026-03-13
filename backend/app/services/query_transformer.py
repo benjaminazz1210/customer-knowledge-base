@@ -18,8 +18,18 @@ class TransformedQuery:
 
 
 class QueryTransformer:
-    def __init__(self):
-        self.strategy = (config.query_transform_strategy or "rewrite").strip().lower()
+    def __init__(
+        self,
+        *,
+        enabled: bool = None,
+        strategy: str = None,
+        model: str = None,
+        multi_query_count: int = None,
+    ):
+        self.enabled = config.query_transform_enabled if enabled is None else bool(enabled)
+        self.strategy = (strategy or config.query_transform_strategy or "rewrite").strip().lower()
+        self.model = model or config.query_transform_model
+        self.multi_query_count = int(config.multi_query_count if multi_query_count is None else multi_query_count)
 
     @staticmethod
     def _normalize(text: str) -> str:
@@ -28,7 +38,7 @@ class QueryTransformer:
     def transform(self, query: str) -> TransformedQuery:
         query = self._normalize(query)
         strategy = self.strategy
-        if not config.query_transform_enabled or strategy in ("", "none"):
+        if not self.enabled or strategy in ("", "none"):
             return TransformedQuery(strategy="none", original_query=query, search_queries=[query], embedding_query=query)
         if strategy == "decompose":
             return self._decompose(query)
@@ -44,7 +54,7 @@ class QueryTransformer:
             f"Query: {query}"
         )
         rewritten = self._normalize(
-            complete_text([{"role": "user", "content": prompt}], model=config.query_transform_model)
+            complete_text([{"role": "user", "content": prompt}], model=self.model)
         )
         if not rewritten:
             rewritten = query
@@ -75,7 +85,7 @@ class QueryTransformer:
             f"Query: {query}"
         )
         hypothetical = self._normalize(
-            complete_text([{"role": "user", "content": prompt}], model=config.query_transform_model)
+            complete_text([{"role": "user", "content": prompt}], model=self.model)
         )
         if not hypothetical:
             hypothetical = f"Knowledge base answer for: {query}"
@@ -99,7 +109,7 @@ class QueryTransformer:
             normalized = self._normalize(candidate)
             if normalized not in variations:
                 variations.append(normalized)
-            if len(variations) >= max(int(config.multi_query_count), 1):
+            if len(variations) >= max(self.multi_query_count, 1):
                 break
         return TransformedQuery(
             strategy="multi_query",

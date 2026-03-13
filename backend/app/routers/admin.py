@@ -12,7 +12,7 @@ from ..services.feedback_service import FeedbackService
 from ..services.rag_service import RAGService
 from ..services.vector_store import VectorStore
 
-router = APIRouter()
+router = APIRouter(prefix="/admin")
 rag_service = RAGService()
 evaluator = Evaluator(rag_service=rag_service)
 ab_test_manager = ABTestManager()
@@ -28,9 +28,33 @@ def require_admin(x_admin_api_key: Optional[str] = Header(default=None)):
     return True
 
 
-@router.post("/admin/evaluate", dependencies=[Depends(require_admin)])
-async def run_evaluation():
-    results = evaluator.run()
+@router.post("/evaluate", dependencies=[Depends(require_admin)])
+async def run_evaluation(
+    session_id: str = Query("evaluation"),
+    experiment_id: Optional[str] = Query(default=None),
+    variant_id: Optional[str] = Query(default=None),
+):
+    overrides = None
+    if experiment_id and variant_id:
+        assigned_variant = ab_test_manager.assign_variant(experiment_id, session_id)
+        if assigned_variant and str(assigned_variant.get("id")) == variant_id:
+            overrides = assigned_variant.get("overrides", {}) or {}
+    results = evaluator.run(
+        session_id=session_id,
+        overrides=overrides,
+        experiment_id=experiment_id,
+        variant_id=variant_id,
+    )
+    if experiment_id and variant_id:
+        ab_test_manager.record_result(
+            experiment_id,
+            variant_id,
+            {
+                "session_id": session_id,
+                "evaluation": results.get("aggregate", {}),
+                "output_path": results.get("output_path"),
+            },
+        )
     return {
         "status": "completed",
         "aggregate": results.get("aggregate", {}),
@@ -39,14 +63,12 @@ async def run_evaluation():
     }
 
 
-@router.get("/admin/experiments/{experiment_id}/results", dependencies=[Depends(require_admin)])
+@router.get("/experiments/{experiment_id}/results", dependencies=[Depends(require_admin)])
 async def get_experiment_results(experiment_id: str):
-    if hasattr(ab_test_manager, "results"):
-        return ab_test_manager.results(experiment_id)
     return {"experiment_id": experiment_id, "results": ab_test_manager.get_results(experiment_id)}
 
 
-@router.get("/admin/feedback/export", dependencies=[Depends(require_admin)])
+@router.get("/feedback/export", dependencies=[Depends(require_admin)])
 async def export_feedback():
     rows = feedback_service.export_feedback()
     return {
@@ -56,12 +78,12 @@ async def export_feedback():
     }
 
 
-@router.get("/admin/documents/versions/{filename}", dependencies=[Depends(require_admin)])
+@router.get("/documents/versions/{filename}", dependencies=[Depends(require_admin)])
 async def get_document_versions(filename: str):
     return {"filename": filename, "versions": version_service.get_versions(filename)}
 
 
-@router.post("/admin/documents/rollback/{filename}", dependencies=[Depends(require_admin)])
+@router.post("/documents/rollback/{filename}", dependencies=[Depends(require_admin)])
 async def rollback_document(filename: str, version_id: str = Query(...)):
     version = version_service.get_version(filename, version_id)
     if not version:

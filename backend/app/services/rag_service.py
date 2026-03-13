@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from openai import OpenAI
 
 from ..config import config
-from ..observability.tracer import PipelineTracer
+from ..observability.tracer import create_tracer
 from .confidence_service import LowConfidenceService
 from .embedding_service import EmbeddingService
 from .graph_store import GraphStore
@@ -109,25 +109,65 @@ class RAGService:
                 return None
         return None
 
+    @staticmethod
+    def _setting(overrides: Optional[Dict[str, Any]], key: str, default: Any) -> Any:
+        if overrides and key in overrides:
+            return overrides[key]
+        return default
+
+    @staticmethod
+    def _completion_text(response: Any) -> str:
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return ""
+        message = getattr(choices[0], "message", None)
+        if message is None:
+            return ""
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("text", "")))
+                else:
+                    parts.append(str(getattr(item, "text", "")))
+            return "".join(parts).strip()
+        return str(content or "").strip()
+
     def _transform_query(self, query: str, overrides: Optional[Dict[str, Any]] = None):
-        transformer = QueryTransformer()
-        if overrides and overrides.get("query_transform_strategy"):
-            transformer.strategy = str(overrides["query_transform_strategy"]).strip().lower()
+        transform_enabled = bool(self._setting(overrides, "query_transform_enabled", config.query_transform_enabled))
+        transform_strategy = str(
+            self._setting(overrides, "query_transform_strategy", config.query_transform_strategy)
+        ).strip().lower()
+        transform_model = self._setting(overrides, "query_transform_model", config.query_transform_model)
+        multi_query_count = int(self._setting(overrides, "multi_query_count", config.multi_query_count))
+        if overrides and "query_transform_enabled" not in overrides and transform_strategy not in ("", "none"):
+            transform_enabled = True
+        transformer = QueryTransformer(
+            enabled=transform_enabled,
+            strategy=transform_strategy,
+            model=transform_model,
+            multi_query_count=multi_query_count,
+        )
         return transformer.transform(query)
 
     def _retrieve_candidates(
         self,
         query: str,
         transformed_query,
-        tracer: PipelineTracer,
+        tracer: Any,
         overrides: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        reranker_enabled = bool(overrides.get("reranker_enabled", config.reranker_enabled)) if overrides else config.reranker_enabled
-        search_limit = int(overrides.get("reranker_top_n", config.reranker_top_n)) if overrides and reranker_enabled else (
-            config.reranker_top_n if config.reranker_enabled else 5
+        reranker_enabled = bool(self._setting(overrides, "reranker_enabled", config.reranker_enabled))
+        search_limit = (
+            int(self._setting(overrides, "reranker_top_n", config.reranker_top_n))
+            if reranker_enabled
+            else (config.reranker_top_n if config.reranker_enabled else max(int(config.reranker_top_k), 5))
         )
-        alpha = float(overrides.get("workflow_hybrid_alpha", config.workflow_hybrid_alpha)) if overrides else config.workflow_hybrid_alpha
-        expand_to_parent = (overrides.get("chunking_strategy") if overrides else config.chunking_strategy) == "parent_child"
+        alpha = float(self._setting(overrides, "workflow_hybrid_alpha", config.workflow_hybrid_alpha))
+        expand_to_parent = self._setting(overrides, "chunking_strategy", config.chunking_strategy) == "parent_child"
 
         rankings: List[List[Dict[str, Any]]] = []
         search_queries = transformed_query.search_queries or [query]
@@ -152,29 +192,41 @@ class RAGService:
             merged = rankings[0] if rankings else []
 
         graph_context = self.graph_store.query_context(query)
-        for context_line in graph_context:
-            merged.append(
-                {
-                    "payload": {
-                        "source_file": "graph://context",
-                        "chunk_text": context_line,
-                        "chunk_index": 10_000 + len(merged),
-                    },
-                    "score": 0.45,
-                    "vector_score": 0.0,
-                    "keyword_score": 0.0,
-                }
-            )
+        for graph_hit in graph_context:
+            if isinstance(graph_hit, dict):
+                merged.append(graph_hit)
 
         merged.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
         return merged[:search_limit]
 
-    def _rerank_candidates(self, query: str, hits: List[Dict[str, Any]], tracer: PipelineTracer) -> List[Dict[str, Any]]:
-        if not config.reranker_enabled:
-            return hits[:5]
+    def _rerank_candidates(
+        self,
+        query: str,
+        hits: List[Dict[str, Any]],
+        tracer: Any,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        reranker_enabled = bool(self._setting(overrides, "reranker_enabled", config.reranker_enabled))
+        top_n = int(self._setting(overrides, "reranker_top_n", config.reranker_top_n))
+        top_k = int(self._setting(overrides, "reranker_top_k", config.reranker_top_k))
+        backend = str(self._setting(overrides, "reranker_backend", config.reranker_backend)).strip().lower()
+        model_name = str(self._setting(overrides, "reranker_model", config.reranker_model))
+        api_url = self._setting(overrides, "reranker_api_url", config.reranker_api_url)
+        api_key = self._setting(overrides, "reranker_api_key", config.reranker_api_key)
+        if not reranker_enabled:
+            return hits[:top_k]
         with tracer.step("rerank", candidate_count=len(hits)):
-            reranked = self.reranker.rerank_hits(query, hits[: config.reranker_top_n])
-        return reranked[: config.reranker_top_k]
+            reranked = self.reranker.rerank_hits(
+                query,
+                hits[:top_n],
+                enabled=reranker_enabled,
+                backend=backend,
+                top_k=top_k,
+                model_name=model_name,
+                api_url=api_url,
+                api_key=api_key,
+            )
+        return reranked[:top_k]
 
     @staticmethod
     def _source_details_from_hits(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -209,6 +261,47 @@ class RAGService:
         messages.append({"role": "user", "content": query})
         return messages
 
+    def _build_response(
+        self,
+        *,
+        tracer: Any,
+        response_gen: Iterable[Any],
+        sources: List[Dict[str, Any]],
+        confidence_score: float,
+        experiment_id: Optional[str],
+        variant_id: Optional[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> RAGResponse:
+        tracer.flush()
+        payload = dict(metadata or {})
+        payload.setdefault("trace", tracer.export())
+        return RAGResponse(
+            response_gen=response_gen,
+            sources=sources,
+            trace_id=tracer.trace_id,
+            confidence_score=confidence_score,
+            experiment_id=experiment_id,
+            variant_id=variant_id,
+            metadata=payload,
+        )
+
+    def _direct_answer_stream(self, query: str, history: List[Dict[str, Any]], tracer: Any):
+        direct_answer = self._simple_direct_answer(query)
+        if direct_answer or self.mock_llm:
+            return self._mock_stream(direct_answer or f"Direct response: {query}")
+
+        with tracer.step("generate", prompt_size=0, history_size=len(history)):
+            messages = [{"role": "system", "content": "直接回答用户问题；无需进行知识库检索。"}]
+            for msg in history:
+                role = "assistant" if msg.get("isAi") else "user"
+                messages.append({"role": role, "content": msg.get("text", "")})
+            messages.append({"role": "user", "content": query})
+            return self.llm_client.chat.completions.create(
+                model=config.llm_model,
+                messages=messages,
+                stream=True,
+            )
+
     def generate_response(
         self,
         query: str,
@@ -220,19 +313,29 @@ class RAGService:
         variant_id: Optional[str] = None,
     ) -> RAGResponse:
         history = self._coerce_history(history)
-        tracer = PipelineTracer(metadata={"query": query, "session_id": session_id})
+        tracer = create_tracer(
+            enabled=config.observability_enabled,
+            metadata={
+                "query": query,
+                "session_id": session_id,
+                "experiment_id": experiment_id,
+                "variant_id": variant_id,
+            },
+        )
 
-        if config.self_rag_enabled and self.self_rag.should_skip_retrieval(query):
-            direct_answer = self._simple_direct_answer(query) or f"Direct response: {query}"
-            return RAGResponse(
-                response_gen=self._mock_stream(direct_answer) if self.mock_llm else self._mock_stream(direct_answer),
-                sources=[],
-                trace_id=tracer.trace_id,
-                confidence_score=1.0,
-                experiment_id=experiment_id,
-                variant_id=variant_id,
-                metadata={"self_rag_skipped_retrieval": True, "trace": tracer.export()},
-            )
+        if config.self_rag_enabled:
+            with tracer.step("self_rag_decision", input_size=len(query)):
+                should_skip = self.self_rag.should_skip_retrieval(query)
+            if should_skip:
+                return self._build_response(
+                    tracer=tracer,
+                    response_gen=self._direct_answer_stream(query, history, tracer),
+                    sources=[],
+                    confidence_score=1.0,
+                    experiment_id=experiment_id,
+                    variant_id=variant_id,
+                    metadata={"self_rag_skipped_retrieval": True},
+                )
 
         with tracer.step("query_transform", input_size=len(query)):
             transformed_query = self._transform_query(query, overrides=overrides)
@@ -241,13 +344,19 @@ class RAGService:
         for attempt in range(max(config.self_rag_max_retries, 0) + 1):
             hits = self._retrieve_candidates(query, transformed_query, tracer, overrides=overrides)
             confidence_score = self.confidence_service.score_hits(hits)
-            if not config.self_rag_enabled or self.self_rag.critique_hits(query, hits, confidence_score):
+            if not config.self_rag_enabled:
+                break
+            with tracer.step("self_rag_critique", attempt=attempt, retrieved=len(hits), confidence_score=confidence_score):
+                critique_passed = self.self_rag.critique_hits(query, hits, confidence_score)
+            if critique_passed:
                 break
             if not self.self_rag.should_retry(hits, confidence_score, attempt):
                 break
-            transformed_query = QueryTransformer()._rewrite(query)
+            retry_overrides = dict(overrides or {})
+            retry_overrides.update({"query_transform_enabled": True, "query_transform_strategy": "rewrite"})
+            transformed_query = self._transform_query(query, overrides=retry_overrides)
 
-        hits = self._rerank_candidates(query, hits, tracer)
+        hits = self._rerank_candidates(query, hits, tracer, overrides=overrides)
         confidence_assessment = self.confidence_service.evaluate(query, hits)
         low_confidence = bool(confidence_assessment.get("is_low_confidence", False))
         confidence_score = float(confidence_assessment.get("confidence_score", 0.0))
@@ -258,14 +367,14 @@ class RAGService:
 
         if low_confidence:
             logger.info("⚠️ Low confidence triggered for query=%r score=%.4f", query, confidence_score)
-            return RAGResponse(
+            return self._build_response(
+                tracer=tracer,
                 response_gen=self._mock_stream(config.low_confidence_message),
                 sources=source_details,
-                trace_id=tracer.trace_id,
                 confidence_score=confidence_score,
                 experiment_id=experiment_id,
                 variant_id=variant_id,
-                metadata={"trace": tracer.export(), "low_confidence": True},
+                metadata={"low_confidence": True},
             )
 
         if self.mock_llm:
@@ -274,14 +383,40 @@ class RAGService:
                 answer = f"Mock answer based on sources {source_files}. Query: {query}"
             else:
                 answer = f"Mock answer: no relevant context found. Query: {query}"
-            return RAGResponse(
+            return self._build_response(
+                tracer=tracer,
                 response_gen=self._mock_stream(answer),
                 sources=source_details,
-                trace_id=tracer.trace_id,
                 confidence_score=confidence_score,
                 experiment_id=experiment_id,
                 variant_id=variant_id,
-                metadata={"trace": tracer.export()},
+            )
+
+        if config.self_rag_enabled:
+            with tracer.step("generate", prompt_size=len(context_text), history_size=len(history), mode="self_rag_non_stream"):
+                messages = self._build_messages(query, history, context_text)
+                response = self.llm_client.chat.completions.create(
+                    model=config.llm_model,
+                    messages=messages,
+                    stream=False,
+                )
+                answer = self._completion_text(response)
+            with tracer.step("self_rag_answer_check", answer_size=len(answer)):
+                if not self.self_rag.critique_answer(query, answer, hits):
+                    retry_response = self.llm_client.chat.completions.create(
+                        model=config.llm_model,
+                        messages=messages,
+                        stream=False,
+                    )
+                    answer = self._completion_text(retry_response)
+            return self._build_response(
+                tracer=tracer,
+                response_gen=self._mock_stream(answer),
+                sources=source_details,
+                confidence_score=confidence_score,
+                experiment_id=experiment_id,
+                variant_id=variant_id,
+                metadata={"self_rag_answer_checked": True},
             )
 
         with tracer.step("generate", prompt_size=len(context_text), history_size=len(history)):
@@ -292,14 +427,13 @@ class RAGService:
                 stream=True,
             )
 
-        return RAGResponse(
+        return self._build_response(
+            tracer=tracer,
             response_gen=response,
             sources=source_details,
-            trace_id=tracer.trace_id,
             confidence_score=confidence_score,
             experiment_id=experiment_id,
             variant_id=variant_id,
-            metadata={"trace": tracer.export()},
         )
 
     def generate_answer_text(
@@ -308,8 +442,18 @@ class RAGService:
         history: Optional[List[Dict[str, Any]]] = None,
         *,
         session_id: str = "default",
+        overrides: Optional[Dict[str, Any]] = None,
+        experiment_id: Optional[str] = None,
+        variant_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        result = self.generate_response(query, history=history, session_id=session_id)
+        result = self.generate_response(
+            query,
+            history=history,
+            session_id=session_id,
+            overrides=overrides,
+            experiment_id=experiment_id,
+            variant_id=variant_id,
+        )
         answer_parts: List[str] = []
         for chunk in result.response_gen:
             token = self._extract_token_from_chunk(chunk)
@@ -320,4 +464,5 @@ class RAGService:
             "sources": result.sources,
             "trace_id": result.trace_id,
             "confidence_score": result.confidence_score,
+            "metadata": result.metadata,
         }
