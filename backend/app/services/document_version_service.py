@@ -164,6 +164,38 @@ class DocumentVersionService:
                 return item
         return None
 
+    def activate_version(
+        self,
+        filename: str,
+        version_id: str,
+        *,
+        activated_by: str = "rollback",
+        timestamp: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        version = self.get_version(filename, version_id)
+        if version is None:
+            raise ValueError(f"Version {version_id} not found for {filename}")
+        activated_record = {
+            "version_id": self.generate_version_id(),
+            "filename": filename,
+            "content_hash": version.get("content_hash"),
+            "hash": version.get("content_hash"),
+            "timestamp": time.time() if timestamp is None else timestamp,
+            "chunks": version.get("chunks", []),
+            "chunk_ids": version.get("chunks", []),
+            "raw_content": version.get("raw_content", ""),
+            "metadata": {
+                **(version.get("metadata", {}) or {}),
+                "activated_from_version_id": version_id,
+                "activation_reason": activated_by,
+            },
+            "embeddings": version.get("embeddings", []),
+        }
+        versions = self.get_versions(filename)
+        versions.append(activated_record)
+        self._set_versions(filename, versions)
+        return activated_record
+
     def rollback(self, filename: str, version_id: str) -> Dict[str, Any]:
         version = self.get_version(filename, version_id)
         if version is None:

@@ -25,7 +25,10 @@ graph_store = GraphStore()
 
 
 def require_admin(x_admin_api_key: Optional[str] = Header(default=None)):
-    if config.admin_api_key and x_admin_api_key != config.admin_api_key:
+    configured_key = (config.admin_api_key or "").strip()
+    if not configured_key:
+        raise HTTPException(status_code=503, detail="Admin API key is not configured")
+    if x_admin_api_key != configured_key:
         raise HTTPException(status_code=401, detail="Invalid admin API key")
     return True
 
@@ -101,10 +104,16 @@ async def rollback_document(filename: str, version_id: str = Query(...)):
         graph_store.replace_document(filename, chunks)
     elif config.graph_rag_enabled:
         graph_store.ingest_document(filename, chunks)
+    current_version = version_service.activate_version(
+        filename,
+        version_id,
+        activated_by="rollback",
+    )
     return {
         "status": "rolled_back",
         "filename": filename,
         "version_id": version_id,
+        "current_version_id": current_version.get("version_id"),
         "chunks_count": len(chunks),
         "restored_points_count": len(embeddings),
         "restored_chunk_hashes": [

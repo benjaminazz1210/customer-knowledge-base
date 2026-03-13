@@ -26,6 +26,8 @@ app.add_middleware(
 @app.on_event("startup")
 async def on_startup():
     logger.info("🚀 NexusAI backend starting up on port 8001")
+    if not (config.admin_api_key or "").strip():
+        logger.warning("⚠️ Admin endpoints are fail-closed because ADMIN_API_KEY is not configured.")
 
 
 @app.on_event("shutdown")

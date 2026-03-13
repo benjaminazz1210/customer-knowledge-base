@@ -111,7 +111,7 @@ class Config(BaseSettings):
     graph_max_hops: int = 2
 
     experiments_config_path: str = "backend/app/experiments.yml"
-    admin_api_key: str = ""
+    admin_api_key: Optional[str] = None
     feedback_ttl_days: int = 90
 
     # Workflow

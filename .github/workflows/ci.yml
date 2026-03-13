@@ -73,6 +73,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements-ci.txt
 
+      - name: Verify optional industrial dependencies
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import importlib
+          for module_name in ("spacy", "presidio_analyzer", "presidio_anonymizer"):
+              importlib.import_module(module_name)
+          print("optional industrial dependencies import successfully")
+          PY
+
       - name: Run strict feature tests
         env:
           BASE_URL: http://127.0.0.1:18001

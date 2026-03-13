@@ -110,15 +110,6 @@ async def upload_file(file: UploadFile = File(...)):
                 existing_vectors[chunk_hash] = vector
 
         diff = version_service.diff_chunks(existing_payloads, prepared_chunks)
-        upsert_keys = {
-            version_service.chunk_identity(chunk, fallback_index=idx)
-            for idx, chunk in enumerate(prepared_chunks)
-            if version_service.chunk_identity(chunk, fallback_index=idx)
-            in {
-                version_service.chunk_identity(payload)
-                for payload in diff["added"] + diff.get("updated", [])
-            }
-        }
 
         embedding_texts = []
         embedding_indexes = []
@@ -150,17 +141,10 @@ async def upload_file(file: UploadFile = File(...)):
         if any(vector is None for vector in embeddings):
             raise RuntimeError("embedding generation did not return a vector for every chunk")
         embeddings = list(embeddings)
-        chunks_to_upsert = []
-        embeddings_to_upsert = []
-        for idx, chunk in enumerate(prepared_chunks):
-            chunk_key = version_service.chunk_identity(chunk, fallback_index=idx)
-            if chunk_key in upsert_keys:
-                chunks_to_upsert.append(chunk)
-                embeddings_to_upsert.append(embeddings[idx])
         vector_store.sync_file_chunks(
             file.filename,
-            chunks_to_upsert,
-            embeddings_to_upsert,
+            prepared_chunks,
+            embeddings,
             deleted_chunk_keys=diff["deleted"],
         )
         if hasattr(graph_store, "replace_document"):
@@ -201,6 +185,7 @@ async def upload_file(file: UploadFile = File(...)):
             "reused_embeddings": reused_embeddings,
             "delta_added": len(diff["added"]),
             "delta_deleted": len(diff["deleted"]),
+            "delta_unchanged": len(diff["unchanged"]),
             "timestamp": time.time(),
         }
     except HTTPException:
